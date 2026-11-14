@@ -34,6 +34,8 @@ pub struct InstalledModule {
 struct StoreState {
     #[serde(default)]
     modules: BTreeMap<String, InstalledModule>,
+    #[serde(default)]
+    previous: BTreeMap<String, InstalledModule>,
 }
 
 /// Каталог установленных версий и активная запись профиля.
@@ -64,6 +66,27 @@ impl PackageStore {
 
     pub fn module(&self, id: &str) -> Option<&InstalledModule> {
         self.state.modules.get(id)
+    }
+
+    pub fn previous(&self, id: &str) -> Option<&InstalledModule> {
+        self.state.previous.get(id)
+    }
+
+    /// Возвращает предыдущую версию и её метаданные.
+    pub fn rollback(&mut self, id: &str) -> Result<InstalledModule, PackageError> {
+        let previous =
+            self.state.previous.remove(id).ok_or_else(|| {
+                PackageError::Install(format!("нет предыдущей версии модуля {id}"))
+            })?;
+        let active = self.state.modules.insert(id.to_owned(), previous.clone());
+        if let Err(error) = self.write_state() {
+            self.state
+                .modules
+                .insert(id.to_owned(), active.expect("активная версия"));
+            self.state.previous.insert(id.to_owned(), previous);
+            return Err(error);
+        }
+        Ok(previous)
     }
 
     /// Проверяет пакет и публикует его версию. Повторные те же байты идемпотентны.
@@ -123,12 +146,27 @@ impl PackageStore {
             entrypoint,
             manifest_path,
         };
+        let previous_active = self.state.modules.get(&installed.id).cloned();
+        let previous_map = self.state.previous.clone();
+        if let Some(old) = previous_active
+            .as_ref()
+            .filter(|old| old.version != installed.version)
+        {
+            self.state
+                .previous
+                .insert(installed.id.clone(), old.clone());
+        }
         self.state
             .modules
             .insert(installed.id.clone(), installed.clone());
         if let Err(error) = self.write_state() {
             // Не оставляем активную запись, если метаданные не записались.
-            self.state.modules.remove(&installed.id);
+            self.state.previous = previous_map;
+            if let Some(old) = previous_active {
+                self.state.modules.insert(installed.id.clone(), old);
+            } else {
+                self.state.modules.remove(&installed.id);
+            }
             let _ = fs::remove_dir_all(&target);
             return Err(error);
         }
@@ -271,6 +309,39 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, PackageError::PublisherConflict(_)));
         assert_eq!(store.modules().len(), 1);
+    }
+
+    #[test]
+    fn update_keeps_previous_version_for_rollback() {
+        let (v1, trust, root) = package("com.example.rollback", "com.example", "0.1.0", 6);
+        let (v2, _, _) = package("com.example.rollback", "com.example", "0.2.0", 6);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&v1, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .install(&v2, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        assert_eq!(
+            store.module("com.example.rollback").unwrap().version,
+            "0.2.0"
+        );
+        assert_eq!(
+            store.previous("com.example.rollback").unwrap().version,
+            "0.1.0"
+        );
+        let rolled = store.rollback("com.example.rollback").unwrap();
+        assert_eq!(rolled.version, "0.1.0");
+        assert_eq!(
+            store.module("com.example.rollback").unwrap().version,
+            "0.1.0"
+        );
+        let reopened = PackageStore::open(&profile).unwrap();
+        assert_eq!(
+            reopened.module("com.example.rollback").unwrap().version,
+            "0.1.0"
+        );
     }
 
     #[test]

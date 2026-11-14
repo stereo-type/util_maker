@@ -893,4 +893,54 @@ mod tests {
         ));
         assert!(transport.requests().is_empty());
     }
+
+    #[test]
+    fn settings_defaults_keep_two_profiles_and_russian_target() {
+        let settings = ProviderSettings::defaults();
+        assert_eq!(settings.active_kind().unwrap(), ProviderKind::Yandex);
+        assert_eq!(settings.profiles.len(), 2);
+        assert_eq!(
+            settings
+                .profile(ProviderKind::Google)
+                .unwrap()
+                .target_language,
+            "ru"
+        );
+        assert_eq!(
+            settings.profile(ProviderKind::Google).unwrap().secret_ref,
+            GOOGLE_SECRET_REF
+        );
+    }
+
+    #[test]
+    fn settings_from_flat_form_apply_active_profile_languages() {
+        let settings = ProviderSettings::from_value(&json!({
+            "activeProfile": "google",
+            "sourceLang": "auto",
+            "targetLang": "de",
+            "profiles": [
+                {"id": "yandex", "targetLanguage": "ru"},
+                {"id": "google", "targetLanguage": "ru"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(settings.active_kind().unwrap(), ProviderKind::Google);
+        let google = settings.profile(ProviderKind::Google).unwrap();
+        assert_eq!(google.source(), None);
+        assert_eq!(google.target_language, "de");
+    }
+
+    #[test]
+    fn settings_reject_duplicate_or_missing_active_profile() {
+        let duplicate = ProviderSettings {
+            active_profile: Some("yandex".to_owned()),
+            profiles: vec![ProfileSettings::yandex(), ProfileSettings::yandex()],
+        };
+        assert!(duplicate.validate().is_err());
+        let missing = ProviderSettings {
+            active_profile: Some("google".to_owned()),
+            profiles: vec![ProfileSettings::yandex()],
+        };
+        assert!(missing.validate().is_err());
+    }
 }

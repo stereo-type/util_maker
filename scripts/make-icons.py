@@ -50,7 +50,24 @@ def inside_u(x: float, y: float, size: float) -> bool:
     return False
 
 
-def render(size: int) -> list[list[tuple[int, int, int, int]]]:
+def inside_pause(x: float, y: float, size: float) -> bool:
+    top = size * 0.27
+    bottom = size * 0.73
+    for left in (size * 0.34, size * 0.56):
+        if left <= x <= left + size * 0.10 and top <= y <= bottom:
+            return True
+    return False
+
+
+def inside_error(x: float, y: float, size: float) -> bool:
+    if size * 0.45 <= x <= size * 0.55 and size * 0.26 <= y <= size * 0.60:
+        return True
+    return size * 0.45 <= x <= size * 0.55 and size * 0.68 <= y <= size * 0.78
+
+
+def render(
+    size: int, background: tuple[int, int, int] = BLUE, symbol: str = "u"
+) -> list[list[tuple[int, int, int, int]]]:
     rows = []
     step = 1.0 / SUPERSAMPLE
     for pixel_y in range(size):
@@ -64,7 +81,12 @@ def render(size: int) -> list[list[tuple[int, int, int, int]]]:
                     y = pixel_y + (sample_y + 0.5) * step
                     if inside_rounded_rect(x, y, size):
                         blue_hits += 1
-                        if inside_u(x, y, size):
+                        inside_symbol = {
+                            "u": inside_u,
+                            "pause": inside_pause,
+                            "error": inside_error,
+                        }[symbol](x, y, size)
+                        if inside_symbol:
                             white_hits += 1
             total = SUPERSAMPLE * SUPERSAMPLE
             if blue_hits == 0:
@@ -72,7 +94,9 @@ def render(size: int) -> list[list[tuple[int, int, int, int]]]:
                 continue
             alpha = round(255 * blue_hits / total)
             ratio = white_hits / blue_hits
-            color = tuple(round(BLUE[i] * (1 - ratio) + WHITE[i] * ratio) for i in range(3))
+            color = tuple(
+                round(background[i] * (1 - ratio) + WHITE[i] * ratio) for i in range(3)
+            )
             row.append((color[0], color[1], color[2], alpha))
         rows.append(row)
     return rows
@@ -83,8 +107,10 @@ def chunk(kind: bytes, payload: bytes) -> bytes:
     return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
 
 
-def png(size: int) -> bytes:
-    rows = render(size)
+def png(
+    size: int, background: tuple[int, int, int] = BLUE, symbol: str = "u"
+) -> bytes:
+    rows = render(size, background, symbol)
     raw = b"".join(
         b"\x00" + bytes(value for pixel in row for value in pixel) for row in rows
     )
@@ -125,6 +151,9 @@ def main() -> None:
         (ICONS / f"{size}x{size}.png").write_bytes(png(size))
     images = [(32, png(32)), (256, png(256))]
     (ICONS / "icon.ico").write_bytes(ico(images))
+    (ICONS / "status-active.png").write_bytes(png(32))
+    (ICONS / "status-paused.png").write_bytes(png(32, (224, 158, 28), "pause"))
+    (ICONS / "status-error.png").write_bytes(png(32, (200, 52, 52), "error"))
     print(f"готово: {ICONS}")
 
 

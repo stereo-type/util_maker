@@ -127,6 +127,26 @@ pub(crate) fn dormant_events() -> std::sync::mpsc::Receiver<HotkeyEvent> {
     receiver
 }
 
+/// Поднимает окно на передний план в Windows. На других ОС — no-op.
+#[cfg(windows)]
+pub fn focus_window(handle: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, SetForegroundWindow, ShowWindow, SW_SHOW,
+    };
+
+    let hwnd = HWND(handle as *mut core::ffi::c_void);
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+/// Поднимает окно на передний план в Windows. На других ОС — no-op.
+#[cfg(not(windows))]
+pub fn focus_window(_handle: isize) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -229,6 +229,10 @@ fn open_settings(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        #[cfg(windows)]
+        if let Ok(hwnd) = window.hwnd() {
+            util_maker_platform::focus_window(hwnd.0 as isize);
+        }
         return;
     }
     match WebviewWindowBuilder::new(app, SETTINGS_WINDOW, WebviewUrl::App("index.html".into()))
@@ -238,7 +242,15 @@ fn open_settings(app: &AppHandle) {
         .center()
         .build()
     {
-        Ok(_) => logging::write("окно настроек открыто"),
+        Ok(window) => {
+            logging::write("окно настроек открыто");
+            #[cfg(not(windows))]
+            let _ = &window;
+            #[cfg(windows)]
+            if let Ok(hwnd) = window.hwnd() {
+                util_maker_platform::focus_window(hwnd.0 as isize);
+            }
+        }
         Err(error) => logging::write(&format!("не удалось открыть настройки: {error}")),
     }
 }
@@ -343,8 +355,45 @@ fn set_shortcut_status(app: &AppHandle, status: &str) {
         }
     }
     logging::write(&format!("сочетание: {status}"));
-    // Подсказку трея не обновляем из обработчика меню: на Windows это может
-    // конфликтовать с открытым контекстным меню. Состояние видно в настройках.
+    apply_tray_state(app);
+}
+
+fn apply_tray_state(app: &AppHandle) {
+    let (icon, tooltip) = if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+        if runtime.paused.load(Ordering::SeqCst) {
+            (
+                include_bytes!("../icons/status-paused.png").as_slice(),
+                "Util Maker — на паузе".to_owned(),
+            )
+        } else if runtime.registered.load(Ordering::SeqCst) {
+            (
+                include_bytes!("../icons/status-active.png").as_slice(),
+                "Util Maker — работает".to_owned(),
+            )
+        } else {
+            let status = runtime
+                .status
+                .lock()
+                .ok()
+                .map(|value| value.clone())
+                .unwrap_or_default();
+            (
+                include_bytes!("../icons/status-error.png").as_slice(),
+                format!("Util Maker — сочетание недоступно: {status}"),
+            )
+        }
+    } else {
+        (
+            include_bytes!("../icons/status-error.png").as_slice(),
+            "Util Maker — состояние неизвестно".to_owned(),
+        )
+    };
+    if let Some(tray) = app.tray_by_id("main") {
+        if let Ok(image) = Image::from_bytes(icon) {
+            let _ = tray.set_icon(Some(image));
+        }
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
 }
 
 fn toggle_shortcut_pause(app: &AppHandle) {
@@ -381,6 +430,10 @@ fn retry_shortcut(app: &AppHandle) {
     let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
         return;
     };
+    if runtime.paused.load(Ordering::SeqCst) {
+        set_shortcut_status(app, "на паузе");
+        return;
+    }
     if runtime.registered.load(Ordering::SeqCst) {
         set_shortcut_status(app, "уже зарегистрировано");
         return;

@@ -89,6 +89,28 @@
       .hotkey-input { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; box-sizing: border-box; }
       .hotkey-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
       .hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+      [hidden] { display: none !important; }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(8, 12, 22, 0.66);
+      }
+      .modal {
+        width: min(540px, 94vw);
+        max-height: 90vh;
+        overflow: auto;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 22px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+      }
+      .modal h2 { margin: 0 0 6px; }
     </style>
   </head>
   <body>
@@ -129,25 +151,6 @@
           Демонстрационный реестр действий. Полноценный список установленных микроприложений с их страницами — отдельная задача; привязки уже хранятся по паре moduleId + actionId.
         </p>
         <div id="hotkey-list"></div>
-        <div id="hotkey-editor" hidden>
-          <label class="check" style="margin-top: 12px">
-            <span>Сочетание</span>
-            <input id="hotkey-input" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" placeholder="Например, Ctrl+Shift+3" />
-          </label>
-          <div class="actions" style="margin-top: 10px">
-            <button id="hotkey-check" type="button">Проверить</button>
-            <button class="primary" id="hotkey-save" type="button" disabled>Сохранить</button>
-            <button id="hotkey-cancel" type="button">Отмена</button>
-          </div>
-          <p class="hint" id="hotkey-status" aria-live="polite"></p>
-          <div id="hotkey-conflict" hidden>
-            <p class="result error" id="hotkey-conflict-text"></p>
-            <div class="actions" style="margin-top: 0">
-              <button id="conflict-cancel" type="button">Отмена</button>
-              <button class="primary" id="conflict-reassign" type="button">Переназначить</button>
-            </div>
-          </div>
-        </div>
         <label class="check" style="margin-top: 14px">
           <input type="checkbox" id="hotkey-save-failure" />
           Имитировать отказ записи
@@ -178,6 +181,30 @@
         <span id="build-kind"></span>
       </footer>
     </main>
+
+    <div id="hotkey-editor" class="modal-backdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="hotkey-modal-title">
+        <h2 class="module-name" id="hotkey-modal-title">Изменить сочетание</h2>
+        <p class="hint" id="hotkey-modal-target"></p>
+          <label class="check" style="margin-top: 12px">
+            <span>Сочетание</span>
+            <input id="hotkey-input" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" placeholder="Например, Ctrl+Shift+3" />
+          </label>
+          <div class="actions" style="margin-top: 10px">
+            <button id="hotkey-check" type="button">Проверить</button>
+            <button class="primary" id="hotkey-save" type="button" disabled>Сохранить</button>
+            <button id="hotkey-cancel" type="button">Отмена</button>
+          </div>
+          <p class="hint" id="hotkey-status" aria-live="polite"></p>
+          <div id="hotkey-conflict" hidden>
+            <p class="result error" id="hotkey-conflict-text"></p>
+            <div class="actions" style="margin-top: 0">
+              <button id="conflict-cancel" type="button">Отмена</button>
+              <button class="primary" id="conflict-reassign" type="button">Переназначить</button>
+            </div>
+          </div>
+              </section>
+    </div>
 
     <script>
       const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
@@ -280,6 +307,7 @@
       const hotkeySave = document.getElementById("hotkey-save");
       const hotkeyConflict = document.getElementById("hotkey-conflict");
       const hotkeyConflictText = document.getElementById("hotkey-conflict-text");
+      const hotkeyModalTarget = document.getElementById("hotkey-modal-target");
       const hotkeyFailure = document.getElementById("hotkey-save-failure");
       let hotkeyTarget = null;
       let hotkeyCheck = null;
@@ -311,6 +339,7 @@
 
       function closeHotkeyEditor() {
         hotkeyEditor.hidden = true;
+        document.body.style.overflow = "";
         hotkeyTarget = null;
         hotkeyCheck = null;
         hotkeyConflict.hidden = true;
@@ -358,6 +387,8 @@
         };
         hotkeyCheck = null;
         hotkeyEditor.hidden = false;
+        document.body.style.overflow = "hidden";
+        hotkeyModalTarget.textContent = `${record.moduleName} — ${record.actionName}`;
         hotkeyConflict.hidden = true;
         hotkeyInput.value = record.combo;
         hotkeySave.disabled = true;
@@ -475,6 +506,13 @@
           saveHotkey({ combo: hotkeyInput.value, expectedOwner: hotkeyCheck.previous });
         }
       });
+      hotkeyEditor.addEventListener("click", (event) => {
+        if (event.target === hotkeyEditor) closeHotkeyEditor();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !hotkeyEditor.hidden) closeHotkeyEditor();
+      });
+
       hotkeyFailure.addEventListener("change", () => {
         invoke("set_hotkey_save_failure", { enabled: hotkeyFailure.checked }).catch((error) =>
           setHotkeyStatus(`Не удалось изменить режим записи: ${error}`, "error")

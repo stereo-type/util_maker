@@ -164,7 +164,7 @@
 
       <section class="card" aria-labelledby="plugins-title">
         <h2 id="plugins-title">Микроприложения</h2>
-        <div id="plugin-list">Загрузка…</div>
+        <div id="plugin-list" role="list">Загрузка…</div>
         <div id="plugin-detail" hidden>
           <h3>Действия</h3>
           <div id="plugin-actions"></div>
@@ -207,7 +207,7 @@
         <p class="hint" id="hotkey-modal-target"></p>
         <label class="check" style="margin-top: 14px; display: block">
           <span>Сочетание</span>
-          <input id="hotkey-input" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" placeholder="Например, Ctrl+Shift+U" style="margin-top: 8px" />
+          <input id="hotkey-input" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" placeholder="Например, Ctrl+Shift+U" aria-describedby="hotkey-status" style="margin-top: 8px" />
         </label>
         <p class="hint" id="hotkey-status" aria-live="polite"></p>
         <div class="actions">
@@ -237,6 +237,7 @@
       let plugins = [];
       let currentPlugin = null;
       let hotkeyTarget = null;
+      let hotkeyTrigger = null;
 
       function showResult(text, kind) {
         elements.result.textContent = text;
@@ -261,7 +262,7 @@
             const icon = document.createElement("img");
             icon.className = "plugin-icon";
             icon.src = plugin.icon;
-            icon.alt = "";
+            icon.alt = `Иконка ${plugin.name}`;
             info.append(icon);
           }
           const text = document.createElement("div");
@@ -282,6 +283,7 @@
           toggle.checked = Boolean(plugin.enabled);
           toggle.disabled = !plugin.installed;
           toggle.title = "Включить или отключить микроприложение";
+          toggle.setAttribute("aria-label", `Включить микроприложение ${plugin.name}`);
           toggle.addEventListener("change", async () => {
             try {
               await invoke("set_plugin_enabled", { pluginId: plugin.id, enabled: toggle.checked });
@@ -299,6 +301,7 @@
           open.textContent = "Открыть";
           open.addEventListener("click", () => openPlugin(plugin));
           right.append(toggle, badge, open);
+          row.setAttribute("role", "listitem");
           row.append(info, right);
           elements.list.append(row);
         }
@@ -422,6 +425,7 @@
         elements.modalTarget.textContent = `${plugin.name} — ${action.name}`;
         elements.input.value = action.hotkey || "";
         setHotkeyStatus("Нажмите клавиши или введите сочетание и сохраните.", "");
+        hotkeyTrigger = document.activeElement;
         elements.modal.hidden = false;
         elements.input.focus();
         elements.input.select();
@@ -430,6 +434,10 @@
       function closeHotkey() {
         elements.modal.hidden = true;
         hotkeyTarget = null;
+        if (hotkeyTrigger && typeof hotkeyTrigger.focus === "function") {
+          hotkeyTrigger.focus();
+        }
+        hotkeyTrigger = null;
       }
 
       async function saveHotkey() {
@@ -471,6 +479,22 @@
           if (event.metaKey) parts.push("Win");
           parts.push(key);
           elements.input.value = parts.join("+");
+        }
+      });
+      elements.modal.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab") return;
+        const focusable = elements.modal.querySelectorAll(
+          'button:not([disabled]), input:not([disabled]), [href], select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
         }
       });
       document.getElementById("hotkey-save").addEventListener("click", saveHotkey);

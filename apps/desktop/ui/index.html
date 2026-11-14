@@ -166,8 +166,7 @@
         <h2 id="plugins-title">Микроприложения</h2>
         <div id="plugin-list">Загрузка…</div>
         <div id="plugin-detail" hidden>
-          <h3 id="plugin-title"></h3>
-          <p class="hint" id="plugin-meta"></p>
+          <h3>Действия</h3>
           <div id="plugin-actions"></div>
           <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
         </div>
@@ -223,8 +222,6 @@
       const elements = {
         list: document.getElementById("plugin-list"),
         detail: document.getElementById("plugin-detail"),
-        title: document.getElementById("plugin-title"),
-        meta: document.getElementById("plugin-meta"),
         actions: document.getElementById("plugin-actions"),
         result: document.getElementById("result"),
         log: document.getElementById("log-path"),
@@ -350,10 +347,6 @@
       function openPlugin(plugin) {
         currentPlugin = plugin;
         elements.detail.hidden = false;
-        elements.title.textContent = plugin.name;
-        elements.meta.textContent = plugin.installed
-          ? `${plugin.publisher} · версия ${plugin.version} · ${plugin.status}`
-          : "Пакет ещё не установлен. Действия и их сочетания появятся после установки.";
         elements.actions.innerHTML = "";
         if (!plugin.installed) {
           showResult("Пакет отсутствует в установленной поставке.", "");

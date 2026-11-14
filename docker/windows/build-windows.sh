@@ -46,6 +46,7 @@ makensis -V2 \
     -DAPP_EXE="$exe" \
     -DMODULE_EXE="$module" \
     -DMODULE_MANIFEST="$manifest" \
+    -DMODULE_ICON=/workspace/plugins/control/assets/icon.png \
     -DREADME_FILE=/workspace/installer/README.txt \
     -DOUT_FILE="$out" \
     /workspace/installer/util-maker.nsi

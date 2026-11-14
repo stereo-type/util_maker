@@ -7,6 +7,7 @@
 ;   APP_EXE          — util-maker-desktop.exe
 ;   MODULE_EXE       — control-module.exe
 ;   MODULE_MANIFEST  — manifest.json контрольного модуля
+;   MODULE_ICON      — иконка модуля из assets
 ;   README_FILE      — краткая инструкция
 ;   OUT_FILE         — путь к итоговому .exe
 ;   VERSION          — версия продукта
@@ -29,6 +30,9 @@ Unicode true
 !endif
 !ifndef MODULE_MANIFEST
     !error "Не задан MODULE_MANIFEST"
+!endif
+!ifndef MODULE_ICON
+    !error "Не задан MODULE_ICON"
 !endif
 !ifndef README_FILE
     !error "Не задан README_FILE"
@@ -96,6 +100,8 @@ previous_removed:
     SetOutPath "$INSTDIR\modules\org.utilmaker.control"
     File "${MODULE_EXE}"
     File "${MODULE_MANIFEST}"
+    SetOutPath "$INSTDIR\modules\org.utilmaker.control\assets"
+    File "${MODULE_ICON}"
 
     SetOutPath "$INSTDIR"
     CreateShortCut "$DESKTOP\Util Maker.lnk" "$INSTDIR\util-maker-desktop.exe"
@@ -131,6 +137,8 @@ Section "Uninstall"
     Delete "$INSTDIR\README.txt"
     Delete "$INSTDIR\modules\org.utilmaker.control\control-module.exe"
     Delete "$INSTDIR\modules\org.utilmaker.control\manifest.json"
+    Delete "$INSTDIR\modules\org.utilmaker.control\assets\icon.png"
+    RMDir "$INSTDIR\modules\org.utilmaker.control\assets"
     RMDir "$INSTDIR\modules\org.utilmaker.control"
     RMDir "$INSTDIR\modules"
     Delete "$INSTDIR\uninstall.exe"

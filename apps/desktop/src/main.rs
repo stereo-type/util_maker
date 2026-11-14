@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{IconMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
@@ -31,7 +31,7 @@ use util_maker_core::{
     ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
 };
 use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
-use util_maker_sdk::{protocol::InvocationSource, Manifest};
+use util_maker_sdk::{protocol::InvocationSource, Action, Manifest};
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
 const CONTROL_ACTION_ID: &str = "ping";
@@ -553,14 +553,39 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Пересобирает меню трея из активных манифестов. Сами процессы не
 /// запускаются: источником служит снимок каталога в реестре.
+fn embedded_menu_icon(bytes: &'static [u8]) -> Option<Image<'static>> {
+    Image::from_bytes(bytes).ok()
+}
+
+fn action_menu_icon(app: &AppHandle, module_id: &str) -> Option<Image<'static>> {
+    let state = app.try_state::<AppState>()?;
+    let entry = state
+        .catalog
+        .registry
+        .modules()
+        .into_iter()
+        .find(|entry| entry.manifest.id == module_id)?;
+    let icon = entry.manifest.icon.as_ref()?;
+    let path = entry.executable.parent()?.join(icon);
+    let bytes = std::fs::read(path).ok()?;
+    Image::from_bytes(&bytes).ok()
+}
+
 fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
     let actions = app
         .try_state::<AppState>()
         .map(|state| state.catalog.registry.actions())
         .unwrap_or_default();
     let menu = Menu::new(app).map_err(|error| format!("меню трея: {error}"))?;
-    let settings = MenuItem::with_id(app, "settings", "Настройки", true, None::<&str>)
-        .map_err(|error| format!("пункт настроек: {error}"))?;
+    let settings = IconMenuItem::with_id(
+        app,
+        "settings",
+        "Настройки",
+        true,
+        embedded_menu_icon(include_bytes!("../icons/32x32.png")),
+        None::<&str>,
+    )
+    .map_err(|error| format!("пункт настроек: {error}"))?;
     menu.append(&settings)
         .map_err(|error| format!("меню трея: {error}"))?;
     menu.append(
@@ -587,11 +612,12 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
                 format!("action:{index}"),
                 ActionRef::new(action.module_id.clone(), action.action_id.clone()),
             );
-            let item = MenuItem::with_id(
+            let item = IconMenuItem::with_id(
                 app,
                 format!("action:{index}"),
                 format!("{} — {}", action.module_name, action.action_name),
                 action.enabled,
+                action_menu_icon(app, &action.module_id),
                 None::<&str>,
             )
             .map_err(|error| format!("пункт действия: {error}"))?;
@@ -610,7 +636,12 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
         ("retry", "Перерегистрировать сочетание"),
         ("quit", "Выход"),
     ] {
-        let item = MenuItem::with_id(app, id, label, true, None::<&str>)
+        let icon = match id {
+            "pause" => embedded_menu_icon(include_bytes!("../icons/status-paused.png")),
+            "retry" => embedded_menu_icon(include_bytes!("../icons/status-active.png")),
+            _ => embedded_menu_icon(include_bytes!("../icons/32x32.png")),
+        };
+        let item = IconMenuItem::with_id(app, id, label, true, icon, None::<&str>)
             .map_err(|error| format!("пункт меню {id}: {error}"))?;
         menu.append(&item)
             .map_err(|error| format!("меню трея: {error}"))?;
@@ -995,12 +1026,23 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
                         id: action.id.clone(),
                         name: action.name.clone(),
                         description: action.description().to_owned(),
-                        hotkey: action.recommended_hotkeys.first().cloned(),
+                        hotkey: action_hotkey(app, &entry.manifest, action),
                     })
                     .collect(),
             }
         })
         .collect()
+}
+
+fn action_hotkey(app: &AppHandle, manifest: &Manifest, action: &Action) -> Option<String> {
+    if manifest.id == CONTROL_MODULE_ID && action.id == CONTROL_ACTION_ID {
+        if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+            if let Ok(combo) = runtime.combo.lock() {
+                return Some(combo.clone());
+            }
+        }
+    }
+    action.recommended_hotkeys.first().cloned()
 }
 
 fn refresh_plugins_inner(app: &AppHandle) -> Vec<PluginDto> {

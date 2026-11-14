@@ -199,6 +199,19 @@ impl<H: PlatformHost> HostDispatcher<H> {
         }
         Ok(())
     }
+
+    /// Отклоняет кадр, который не удалось закрепить за вызовом, и сразу
+    /// возвращает платформе его буфер. Без этого поздняя ошибка проверки
+    /// оставляла бы захваченные пиксели до конца жизни диспетчера.
+    fn reject_frame(
+        &mut self,
+        session: &CallSession,
+        buffer_id: &str,
+        error: RpcError,
+    ) -> RpcError {
+        let _ = self.platform.release_frame(session, buffer_id);
+        error
+    }
 }
 
 impl<H: PlatformHost> HostSession for HostDispatcher<H> {
@@ -253,32 +266,52 @@ impl<H: PlatformHost> HostHandler for HostDispatcher<H> {
                         )
                     })?;
                 let frame = self.platform.capture_frame(&session, &request)?;
+                if frame.buffer_id.is_empty() {
+                    return Err(self.reject_frame(
+                        &session,
+                        &frame.buffer_id,
+                        RpcError::new(error_codes::INVALID_PARAMS, "кадр без идентификатора"),
+                    ));
+                }
                 if self.frames.contains_key(&frame.buffer_id) {
-                    return Err(RpcError::new(
-                        error_codes::INVALID_PARAMS,
-                        "идентификатор кадра уже используется",
+                    return Err(self.reject_frame(
+                        &session,
+                        &frame.buffer_id,
+                        RpcError::new(
+                            error_codes::INVALID_PARAMS,
+                            "идентификатор кадра уже используется",
+                        ),
                     ));
                 }
                 if frame.width == 0 || frame.height == 0 || frame.stride == 0 {
-                    return Err(RpcError::new(
-                        error_codes::INVALID_PARAMS,
-                        "кадр имеет нулевой размер",
+                    return Err(self.reject_frame(
+                        &session,
+                        &frame.buffer_id,
+                        RpcError::new(error_codes::INVALID_PARAMS, "кадр имеет нулевой размер"),
                     ));
                 }
+                let value = match serde_json::to_value(&frame) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Err(self.reject_frame(
+                            &session,
+                            &frame.buffer_id,
+                            RpcError::new(
+                                error_codes::INTERNAL_ERROR,
+                                format!("сериализация кадра: {error}"),
+                            ),
+                        ))
+                    }
+                };
                 self.frames.insert(
-                    frame.buffer_id.clone(),
+                    frame.buffer_id,
                     FrameLease {
                         call_id: session.call_id.clone(),
                         expires_at: Instant::now()
                             + Duration::from_millis(u64::from(frame.expires_in_ms.max(1))),
                     },
                 );
-                serde_json::to_value(frame).map_err(|error| {
-                    RpcError::new(
-                        error_codes::INTERNAL_ERROR,
-                        format!("сериализация кадра: {error}"),
-                    )
-                })
+                Ok(value)
             }
             host_methods::FRAME_RELEASE => {
                 let buffer_id = call

@@ -25,12 +25,14 @@
 
 Linux, контейнер `util-maker-dev:local`:
 
-- `cargo test -p util-maker-core --test host_dispatch` — 4/4:
+- `cargo test -p util-maker-core --test host_dispatch` — 7/7:
   - два активных вызова получают свои кадры и секреты; попытка освободить чужой кадр даёт `CAPABILITY_DENIED`;
   - после `finish_call` платформенный адаптер получает освобождение кадра;
+  - повторный ID и нулевой размер кадра отклоняются, а уже захваченный буфер сразу возвращается платформе;
+  - отмена реального процесса после получения кадра освобождает буфер;
   - просроченная ссылка даёт `BUFFER_EXPIRED`;
   - потерянный источник даёт `CONTEXT_LOST`, необъявленная возможность — `CAPABILITY_DENIED`;
   - реальный процесс `fixture-module` получает кадр через `host.call`.
-- `cargo test -p util-maker-core --test host_capabilities` — 3/3 для контракта SDK; `make check` — 106 тестов, Clippy и rustfmt без замечаний.
+- `cargo test -p util-maker-core --test host_capabilities` — 3/3 для контракта SDK; `make check` — 122 теста, Clippy и rustfmt без замечаний.
 
 Реальная передача Win32-кадра и подписок подключается через `PlatformHost` в задачах платформы; Linux-проверка использует подменную ОС.

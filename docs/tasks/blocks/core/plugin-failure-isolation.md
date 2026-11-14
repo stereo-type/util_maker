@@ -33,4 +33,4 @@ Linux, контейнер `util-maker-dev:local`:
   - запоздалое сообщение с чужим `id` и заголовком `Authorization` попадает в журнал только после `sanitize`: секрет не найден.
 - `make check` — 106 тестов, Clippy и rustfmt без замечаний.
 
-Для Windows остаётся ручная проверка сообщения и кнопки «Отключить плагин» по [карточке desktop](../desktop/package-management.md) на ревизии из этого изменения.
+Для Windows остаётся ручная проверка сообщения и кнопки «Отключить плагин» по [карточке desktop](../desktop/package-management.md) на ревизии `645d24d`.

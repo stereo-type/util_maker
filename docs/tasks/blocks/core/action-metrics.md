@@ -30,3 +30,5 @@ Linux, контейнер `util-maker-dev:local`:
   - при отсутствии `firstFrameMs` две завершённые записи видны как `frameSamples=0`, а не как нулевой отклик.
 - `make check` — 106 тестов, Clippy и rustfmt без замечаний.
 - Синтаксис PowerShell-скрипта проверяется на Windows при реальном замере; Linux-тест покрывает разбор журнала, не запуская Windows API.
+
+Ревизия для Windows — `645d24d`: выполнить `scripts/measure-windows.ps1 -InvokeBenchmark` на журнале с 50 вызовами и сверить p95 по каждому `moduleId + actionId` отдельно для `cold=true/false`.

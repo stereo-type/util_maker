@@ -33,7 +33,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
-	version check-version bump-version icons control-samples example-package package-export windows-image build-windows
+	version check-version bump-version build-windows-rise icons control-samples example-package package-export windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -46,6 +46,7 @@ help:
 		'make check  — сверка версии + fmt + lint + test' \
 		'make version  — показать версию и тип сборки' \
 		'make bump-version VERSION=x.y.z  — поднять версию в Cargo.toml, tauri.conf.json и установщике' \
+		'make build-windows-rise  — поднять patch-версию и сразу собрать установщик' \
 		'make icons  — пересоздать иконки приложения' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
@@ -87,8 +88,18 @@ bump-version:
 	@sed -i '0,/^version = ".*"/s//version = "$(VERSION)"/' Cargo.toml
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' apps/desktop/tauri.conf.json
 	@sed -i 's/!define VERSION "[^"]*"/!define VERSION "$(VERSION)"/' installer/util-maker.nsi
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/control/manifest.json
 	@sed -i 's/Util Maker — прототип [0-9][0-9.]*/Util Maker — прототип $(VERSION)/' installer/README.txt
 	@echo "Версия $(VERSION) записана в Cargo.toml, tauri.conf.json и установщик. Проверьте make check-version."
+
+build-windows-rise:
+	@set -e; \
+	current="$(VERSION)"; \
+	echo "$$current" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "Версия $$current не в формате x.y.z, автоматический patch-бамп невозможен"; exit 2; }; \
+	next=$$(printf '%s\n' "$$current" | awk -F. '{printf "%s.%s.%d", $$1, $$2, $$3 + 1}'); \
+	echo "Версия $$current -> $$next"; \
+	$(MAKE) bump-version VERSION="$$next"; \
+	$(MAKE) build-windows
 
 check-version:
 	@cargo_version=$$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1); \

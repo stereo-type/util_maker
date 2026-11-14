@@ -76,6 +76,21 @@ impl PackageStore {
         self.state.previous.get(id)
     }
 
+    /// Версии, каталоги которых уже лежат рядом с активной.
+    pub fn versions(&self, id: &str) -> Vec<String> {
+        let directory = self.root.join("modules").join(id);
+        let Ok(entries) = fs::read_dir(directory) else {
+            return Vec::new();
+        };
+        let mut versions: Vec<String> = entries
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        versions.sort();
+        versions
+    }
+
     pub fn settings(&self, id: &str) -> Option<&serde_json::Value> {
         self.state.settings.get(id)
     }
@@ -446,6 +461,24 @@ mod tests {
         assert_eq!(
             reopened.module("com.example.rollback").unwrap().version,
             "0.1.0"
+        );
+    }
+
+    #[test]
+    fn lists_installed_versions() {
+        let (v1, trust, root) = package("com.example.versions", "com.example", "0.1.0", 10);
+        let (v2, _, _) = package("com.example.versions", "com.example", "0.2.0", 10);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&v1, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .install(&v2, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        assert_eq!(
+            store.versions("com.example.versions"),
+            vec!["0.1.0", "0.2.0"]
         );
     }
 

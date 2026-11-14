@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Состояния выбора текста для микроприложения «Переводчик»"
+description = "Состояния выбора текста и процесс микроприложения «Переводчик»"
+
+[[bin]]
+name = "translator-module"
+path = "src/main.rs"
 
 [dependencies]
+serde_json.workspace = true
+util-maker-sdk.workspace = true

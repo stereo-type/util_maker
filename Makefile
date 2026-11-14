@@ -4,6 +4,9 @@ DEV_HOME := /workspace/.cache/util-maker-dev
 WINDOWS_IMAGE ?= util-maker-windows:local
 WINDOWS_CACHE := .cache/windows-build
 BUILD_KIND ?= dev
+CONTROL_SAMPLES_DIR ?= dist/control-samples
+CONTROL_SAMPLE_VERSIONS ?= 0.4.1 0.5.0
+CONTROL_SAMPLE_PLATFORM ?= linux-x64
 VERSION := $(shell sed -n 's/^  "version": "\([^"]*\)".*/\1/p' apps/desktop/tauri.conf.json | head -n 1)
 export CMD
 
@@ -20,7 +23,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
-	version check-version icons windows-image build-windows
+	version check-version icons control-samples windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -33,6 +36,7 @@ help:
 		'make check  — сверка версии + fmt + lint + test' \
 		'make version  — показать версию и тип сборки' \
 		'make icons  — пересоздать иконки приложения' \
+		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make build-windows  — собрать NSIS-установщик в dist/ (Linux Docker, BUILD_KIND=dev)'
 
 dev-image:
@@ -76,6 +80,9 @@ check: check-version fmt lint test
 
 icons:
 	python3 scripts/make-icons.py
+
+control-samples: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "CONTROL_SAMPLES_DIR='$(CONTROL_SAMPLES_DIR)' CONTROL_SAMPLE_VERSIONS='$(CONTROL_SAMPLE_VERSIONS)' CONTROL_SAMPLE_PLATFORM='$(CONTROL_SAMPLE_PLATFORM)' sh /workspace/scripts/make-control-samples.sh"
 
 windows-image:
 	docker build --tag "$(WINDOWS_IMAGE)" docker/windows

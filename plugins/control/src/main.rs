@@ -11,6 +11,14 @@ use util_maker_sdk::{
     HOST_API_VERSION,
 };
 
+/// Версия штатного процесса. Тестовые образцы пакета собираются с явной
+/// версией через `UTIL_MAKER_MODULE_VERSION`, чтобы один ID модуля мог
+/// воспроизвести обновление без пересборки хоста.
+const MODULE_VERSION: &str = match option_env!("UTIL_MAKER_MODULE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 struct ControlModule {
     info: ModuleInfo,
     started: Instant,
@@ -21,7 +29,7 @@ impl ControlModule {
         Self {
             info: ModuleInfo {
                 id: "org.utilmaker.control",
-                version: env!("CARGO_PKG_VERSION"),
+                version: MODULE_VERSION,
                 host_api: HOST_API_VERSION,
                 capabilities: &[],
             },
@@ -64,8 +72,7 @@ impl Module for ControlModule {
 fn main() {
     eprintln!(
         "[control-module] старт: id org.utilmaker.control, версия {}, API {}",
-        env!("CARGO_PKG_VERSION"),
-        HOST_API_VERSION
+        MODULE_VERSION, HOST_API_VERSION
     );
     let mut module = ControlModule::new();
     match run_stdio(&mut module) {

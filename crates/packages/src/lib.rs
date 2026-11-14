@@ -5,6 +5,8 @@
 //! с SHA-256. Проверка ничего не распаковывает и не запускает: модуль
 //! активируется только после успешной проверки.
 
+pub mod export;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -16,6 +18,8 @@ use sha2::{Digest, Sha256};
 use util_maker_sdk::manifest::Manifest;
 use util_maker_sdk::ManifestError;
 use zip::ZipArchive;
+
+pub use export::{export_package, ExportError, ExportOptions, ExportResult};
 
 /// Имя манифеста внутри архива.
 pub const MANIFEST_ENTRY: &str = "manifest.json";

@@ -416,6 +416,8 @@ fn register_shortcut(service: &HotkeyService, combo: &str) -> (bool, String) {
 #[serde(rename_all = "camelCase")]
 struct LastResult {
     message: String,
+    module_id: String,
+    action_id: String,
     action_name: String,
     source: String,
     core_elapsed_ms: u128,
@@ -832,6 +834,8 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: outcome.message.clone(),
+                    module_id: outcome.module_id.clone(),
+                    action_id: outcome.action_id.clone(),
                     action_name: outcome.action_name.clone(),
                     source: source.as_str().to_owned(),
                     core_elapsed_ms: outcome.elapsed.as_millis(),
@@ -866,6 +870,8 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: format!("Не удалось выполнить действие: {error}"),
+                    module_id: target.module_id.clone(),
+                    action_id: target.action_id.clone(),
                     action_name: action_name_for(app, &target),
                     source: source.as_str().to_owned(),
                     core_elapsed_ms: 0,
@@ -1391,6 +1397,8 @@ async fn invoke_target(
             .map_err(|error| format!("задача вызова прервана: {error}"))??;
     let last = LastResult {
         message: outcome.message.clone(),
+        module_id: outcome.module_id.clone(),
+        action_id: outcome.action_id.clone(),
         action_name: outcome.action_name.clone(),
         source: source.unwrap_or_else(|| "settings".to_owned()),
         core_elapsed_ms: outcome.elapsed.as_millis(),

@@ -137,7 +137,11 @@ fn main() {
                     .and_then(|params| params.get("callId"))
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                if mode == "host-call" || mode == "host-context" || mode == "host-secret" {
+                if mode == "host-call"
+                    || mode == "host-context"
+                    || mode == "host-secret"
+                    || mode == "host-hang"
+                {
                     let requested_call = if mode == "host-context" {
                         "stale-call"
                     } else {
@@ -167,6 +171,11 @@ fn main() {
                     };
                     let host_response: Value =
                         serde_json::from_str(&host_line).unwrap_or(Value::Null);
+                    if mode == "host-hang" {
+                        // Кадр уже получен; держим вызов активным, пока хост
+                        // не отменит его и не освободит буфер.
+                        sleep(Duration::from_secs(30));
+                    }
                     if let Some(error) = host_response.get("error") {
                         write_response(
                             &mut stdout,

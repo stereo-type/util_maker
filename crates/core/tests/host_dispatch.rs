@@ -3,7 +3,8 @@
 mod support;
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -11,9 +12,11 @@ use util_maker_core::capabilities::{
     CallSession, HostDispatcher, HostSession, InvocationContext, PlatformHost, SourceRef,
 };
 use util_maker_core::ipc::ModuleProcess;
+use util_maker_core::registry::ActionRef;
+use util_maker_core::{Manifest, ModuleEntry, Registry};
 use util_maker_sdk::{
-    error_codes, host_methods, FrameOrigin, FrameRef, FrameRequest, HostCall, HostCallContext,
-    HostHandler, InvocationSource, RpcError, FRAME_FORMAT_BGRA8,
+    error_codes, host_methods, Action, FrameOrigin, FrameRef, FrameRequest, HostCall,
+    HostCallContext, HostHandler, InvocationSource, RpcError, FRAME_FORMAT_BGRA8,
 };
 
 #[derive(Default)]
@@ -23,6 +26,8 @@ struct FakePlatform {
     settings: BTreeMap<String, Value>,
     released: Vec<String>,
     expires_in_ms: u32,
+    reuse_next_id: bool,
+    zero_next_frame: bool,
 }
 
 impl FakePlatform {
@@ -47,12 +52,22 @@ impl PlatformHost for SharedPlatform {
     ) -> Result<FrameRef, RpcError> {
         let mut platform = self.0.lock().expect("платформа");
         platform.next_frame += 1;
+        let frame_number = if platform.reuse_next_id {
+            platform.next_frame.saturating_sub(1).max(1)
+        } else {
+            platform.next_frame
+        };
+        let (width, height, stride) = if platform.zero_next_frame {
+            (0, 10, 40)
+        } else {
+            (10, 10, 40)
+        };
         Ok(FrameRef {
-            buffer_id: format!("{}-frame-{}", context.module_id, platform.next_frame),
+            buffer_id: format!("{}-frame-{frame_number}", context.module_id),
             format: FRAME_FORMAT_BGRA8.to_owned(),
-            width: 10,
-            height: 10,
-            stride: 40,
+            width,
+            height,
+            stride,
             origin: FrameOrigin { x: 0, y: 0 },
             scale_factor: 1.0,
             expires_in_ms: platform.expires_in_ms,
@@ -219,6 +234,74 @@ fn frames_and_secrets_stay_with_their_call() {
 }
 
 #[test]
+fn duplicate_frame_id_is_rejected_and_released() {
+    let platform = platform();
+    let mut dispatcher = HostDispatcher::new(SharedPlatform(platform.clone()));
+    dispatcher.begin_call(&session("one", "org.example.one", &["screen.frame"]));
+    let capture = || HostCall {
+        call_id: "one".to_owned(),
+        capability: "screen.frame".to_owned(),
+        method: host_methods::FRAME_CAPTURE.to_owned(),
+        params: json!({}),
+    };
+    let frame = dispatcher
+        .handle(
+            &context("one", "org.example.one", &["screen.frame"]),
+            &capture(),
+        )
+        .expect("первый кадр");
+    let buffer = frame["bufferId"].as_str().expect("ID").to_owned();
+    platform.lock().expect("платформа").reuse_next_id = true;
+
+    let error = dispatcher
+        .handle(
+            &context("one", "org.example.one", &["screen.frame"]),
+            &capture(),
+        )
+        .expect_err("повторный ID");
+    assert_eq!(error.code, error_codes::INVALID_PARAMS);
+    assert_eq!(
+        platform.lock().expect("платформа").released,
+        vec![buffer.clone()]
+    );
+
+    dispatcher.finish_call("one");
+    assert_eq!(
+        platform.lock().expect("платформа").released,
+        vec![buffer.clone(), buffer]
+    );
+}
+
+#[test]
+fn zero_sized_frame_is_rejected_and_released() {
+    let platform = platform();
+    platform.lock().expect("платформа").zero_next_frame = true;
+    let mut dispatcher = HostDispatcher::new(SharedPlatform(platform.clone()));
+    dispatcher.begin_call(&session("one", "org.example.one", &["screen.frame"]));
+    let error = dispatcher
+        .handle(
+            &context("one", "org.example.one", &["screen.frame"]),
+            &HostCall {
+                call_id: "one".to_owned(),
+                capability: "screen.frame".to_owned(),
+                method: host_methods::FRAME_CAPTURE.to_owned(),
+                params: json!({}),
+            },
+        )
+        .expect_err("пустой кадр");
+    assert_eq!(error.code, error_codes::INVALID_PARAMS);
+    assert_eq!(
+        platform.lock().expect("платформа").released,
+        vec!["org.example.one-frame-1".to_owned()]
+    );
+    dispatcher.finish_call("one");
+    assert_eq!(
+        platform.lock().expect("платформа").released,
+        vec!["org.example.one-frame-1".to_owned()]
+    );
+}
+
+#[test]
 fn expired_frame_is_rejected() {
     let platform = platform();
     let mut dispatcher = HostDispatcher::new(SharedPlatform(platform));
@@ -291,6 +374,65 @@ fn lost_context_is_distinct_from_denied_capability() {
         )
         .expect_err("возможность не объявлена");
     assert_eq!(denied.code, error_codes::CAPABILITY_DENIED);
+}
+
+#[test]
+fn cancelled_call_releases_frame() {
+    let manifest_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/control/manifest.json");
+    let mut manifest = Manifest::load(&manifest_path).expect("манифест");
+    manifest.id = "org.utilmaker.fixture".to_owned();
+    manifest.capabilities = vec!["screen.frame".to_owned()];
+    manifest.actions = vec![Action {
+        id: "any".to_owned(),
+        name: "Тестовый захват".to_owned(),
+        description: None,
+        recommended_hotkeys: Vec::new(),
+    }];
+    let entry = ModuleEntry::new(manifest, support::binary("fixture-module"), true)
+        .with_arguments(vec!["host-hang".to_owned()]);
+    let registry = Arc::new(Registry::new());
+    registry.replace_packages(vec![entry]).expect("каталог");
+
+    let platform = platform();
+    let (captured, wait_for_frame) = mpsc::channel();
+    let registry_for_cancel = registry.clone();
+    let platform_for_cancel = platform.clone();
+    let canceller = std::thread::spawn(move || {
+        for _ in 0..200 {
+            if platform_for_cancel.lock().expect("платформа").next_frame > 0 {
+                registry_for_cancel.cancel_all();
+                let _ = captured.send(true);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = captured.send(false);
+    });
+
+    let mut dispatcher = HostDispatcher::new(SharedPlatform(platform.clone()));
+    let result = registry.invoke_session(
+        &ActionRef::new("org.utilmaker.fixture", "any"),
+        InvocationContext::hotkey(Some(SourceRef("window-1".to_owned()))),
+        Duration::from_secs(30),
+        None,
+        &mut dispatcher,
+    );
+    assert!(
+        wait_for_frame
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(false),
+        "кадр не был захвачен"
+    );
+    canceller.join().expect("поток отмены");
+    assert!(
+        result.is_err(),
+        "отменённый вызов должен завершиться ошибкой"
+    );
+    assert_eq!(
+        platform.lock().expect("платформа").released,
+        vec!["org.utilmaker.fixture-frame-1".to_owned()]
+    );
 }
 
 #[test]

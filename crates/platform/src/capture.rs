@@ -162,7 +162,7 @@ impl<S: ScreenSource> ScreenService<S> {
         Ok(frame)
     }
 
-    /// Возвращает пиксели только владельцу ссылки.
+    /// Возвращает описание кадра только владельцу ссылки.
     pub fn frame(&mut self, call_id: &str, buffer_id: &str) -> Result<&FrameRef, RpcError> {
         self.expire(Instant::now());
         self.owned(call_id, buffer_id).map(|stored| &stored.frame)
@@ -437,6 +437,7 @@ mod tests {
     struct SyntheticScreen {
         captures: Cell<u32>,
         fail_width: Option<u32>,
+        short_stride: bool,
     }
 
     impl SyntheticScreen {
@@ -473,6 +474,14 @@ mod tests {
             self.captures.set(self.captures.get() + 1);
             if self.fail_width == Some(rect.width) {
                 return Err(ScreenSourceError::capture("синтетический отказ"));
+            }
+            if self.short_stride {
+                let stride = rect.width * 3;
+                return Ok(RawFrame {
+                    rect,
+                    stride,
+                    pixels: vec![0u8; (stride * rect.height) as usize],
+                });
             }
             let stride = rect.width * 4;
             let mut pixels = vec![0u8; (stride * rect.height) as usize];
@@ -633,6 +642,34 @@ mod tests {
             .expect_err("ресурс освобождён");
         assert_eq!(expired.code, error_codes::BUFFER_EXPIRED);
         assert_eq!(service.buffered_frames(), 0);
+    }
+
+    #[test]
+    fn malformed_frame_is_rejected_without_stored_buffer() {
+        let mut synthetic = SyntheticScreen::new();
+        synthetic.short_stride = true;
+        let mut service = ScreenService::new(synthetic);
+        let error = service
+            .capture_for_call(
+                "call-short",
+                &FrameRequest {
+                    monitor: None,
+                    region: Some(FrameRegion {
+                        x: 0,
+                        y: 0,
+                        width: 16,
+                        height: 16,
+                    }),
+                },
+            )
+            .expect_err("короткий шаг строки");
+        assert_eq!(error.code, error_codes::INTERNAL_ERROR);
+        assert_eq!(service.buffered_frames(), 0);
+        assert_eq!(service.source().captures.get(), 1);
+        let missing = service
+            .frame_bytes("call-short", "call-short-frame-1")
+            .expect_err("буфер не создан");
+        assert_eq!(missing.code, error_codes::BUFFER_EXPIRED);
     }
 
     #[test]

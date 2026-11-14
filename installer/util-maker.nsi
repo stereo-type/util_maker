@@ -8,7 +8,7 @@
 ;   MODULE_EXE       — control-module.exe
 ;   MODULE_MANIFEST  — manifest.json контрольного модуля
 ;   MODULE_ICON      — иконка модуля из assets
-;   SCREENSHOT_EXE, SCREENSHOT_MANIFEST — плагин «Скриншоты»
+;   SCREENSHOT_EXE, SCREENSHOT_MANIFEST, SCREENSHOT_ICON — плагин «Скриншоты»
 ;   TRANSLATOR_EXE, TRANSLATOR_MANIFEST — плагин «Переводчик»
 ;   README_FILE      — краткая инструкция
 ;   OUT_FILE         — путь к итоговому .exe
@@ -41,6 +41,9 @@ Unicode true
 !endif
 !ifndef SCREENSHOT_MANIFEST
     !error "Не задан SCREENSHOT_MANIFEST"
+!endif
+!ifndef SCREENSHOT_ICON
+    !error "Не задан SCREENSHOT_ICON"
 !endif
 !ifndef TRANSLATOR_EXE
     !error "Не задан TRANSLATOR_EXE"
@@ -120,6 +123,8 @@ previous_removed:
     SetOutPath "$INSTDIR\modules\org.utilmaker.screenshot"
     File "${SCREENSHOT_EXE}"
     File "${SCREENSHOT_MANIFEST}"
+    SetOutPath "$INSTDIR\modules\org.utilmaker.screenshot\assets"
+    File "${SCREENSHOT_ICON}"
 
     SetOutPath "$INSTDIR\modules\org.utilmaker.translator"
     File "${TRANSLATOR_EXE}"
@@ -164,6 +169,8 @@ Section "Uninstall"
     RMDir "$INSTDIR\modules\org.utilmaker.control"
     Delete "$INSTDIR\modules\org.utilmaker.screenshot\screenshot-plugin.exe"
     Delete "$INSTDIR\modules\org.utilmaker.screenshot\manifest.json"
+    Delete "$INSTDIR\modules\org.utilmaker.screenshot\assets\icon.png"
+    RMDir "$INSTDIR\modules\org.utilmaker.screenshot\assets"
     RMDir "$INSTDIR\modules\org.utilmaker.screenshot"
     Delete "$INSTDIR\modules\org.utilmaker.translator\translator-module.exe"
     Delete "$INSTDIR\modules\org.utilmaker.translator\manifest.json"

@@ -53,6 +53,7 @@ makensis -V2 \
     -DMODULE_ICON=/workspace/plugins/control/assets/icon.png \
     -DSCREENSHOT_EXE="$screenshot_module" \
     -DSCREENSHOT_MANIFEST="$screenshot_manifest" \
+    -DSCREENSHOT_ICON=/workspace/plugins/screenshot/assets/icon.png \
     -DTRANSLATOR_EXE="$translator_module" \
     -DTRANSLATOR_MANIFEST="$translator_manifest" \
     -DREADME_FILE=/workspace/installer/README.txt \

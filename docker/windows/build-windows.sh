@@ -33,7 +33,11 @@ for file in "$exe" "$module" "$manifest"; do
 done
 
 mkdir -p /workspace/dist
-out="/workspace/dist/UtilMaker-Setup-$version.exe"
+build_kind=$(printf '%s' "${UTIL_MAKER_BUILD:-dev}" | tr -cd 'A-Za-z0-9._-')
+if [ -z "$build_kind" ]; then
+    build_kind=dev
+fi
+out="/workspace/dist/UtilMaker-Setup-$version-$build_kind.exe"
 rm -f "$out"
 
 makensis -V2 \

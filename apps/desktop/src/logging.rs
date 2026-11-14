@@ -34,7 +34,8 @@ pub fn init() {
         .map(|value| value.display().to_string())
         .unwrap_or_else(|_| "неизвестно".to_owned());
     write(&format!(
-        "старт build={BUILD_KIND} exe={executable} log={}",
+        "старт version={} build={BUILD_KIND} exe={executable} log={}",
+        env!("CARGO_PKG_VERSION"),
         path.display()
     ));
 }

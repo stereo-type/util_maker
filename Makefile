@@ -4,6 +4,7 @@ DEV_HOME := /workspace/.cache/util-maker-dev
 WINDOWS_IMAGE ?= util-maker-windows:local
 WINDOWS_CACHE := .cache/windows-build
 BUILD_KIND ?= dev
+VERSION := $(shell sed -n 's/^  "version": "\([^"]*\)".*/\1/p' apps/desktop/tauri.conf.json | head -n 1)
 export CMD
 
 dev_container = docker run --rm --user "$$(id -u):$$(id -g)" \
@@ -19,7 +20,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
-	icons windows-image build-windows
+	version check-version icons windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -29,7 +30,8 @@ help:
 		'make fmt-fix  — отформатировать Rust' \
 		'make lint  — Clippy с ошибками вместо предупреждений' \
 		'make test  — тесты workspace, включая IPC контрольного модуля' \
-		'make check  — fmt + lint + test' \
+		'make check  — сверка версии + fmt + lint + test' \
+		'make version  — показать версию и тип сборки' \
 		'make icons  — пересоздать иконки приложения' \
 		'make build-windows  — собрать NSIS-установщик в dist/ (Linux Docker, BUILD_KIND=dev)'
 
@@ -59,7 +61,18 @@ lint: dev-image
 test: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test --workspace --all-targets"
 
-check: fmt lint test
+version:
+	@printf 'Версия: %s\nТип сборки: %s\n' "$(VERSION)" "$(BUILD_KIND)"
+
+check-version:
+	@cargo_version=$$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1); \
+	if [ "$$cargo_version" != "$(VERSION)" ]; then \
+		echo "Версия Cargo.toml ($$cargo_version) не совпадает с tauri.conf.json ($(VERSION))"; \
+		exit 1; \
+	fi; \
+	echo "Версия $(VERSION) согласована."
+
+check: check-version fmt lint test
 
 icons:
 	python3 scripts/make-icons.py
@@ -71,4 +84,4 @@ windows-image:
 build-windows: windows-image
 	@mkdir -p dist $(WINDOWS_CACHE)
 	$(windows_container) "$(WINDOWS_IMAGE)" sh /usr/local/bin/util-maker-build-windows
-	@printf 'Установщик: %s\n' "$$(ls -1 dist/UtilMaker-Setup-*.exe | tail -1)"
+	@printf 'Установщик: %s\n' "$$(ls -1t dist/UtilMaker-Setup-*.exe | head -1)"

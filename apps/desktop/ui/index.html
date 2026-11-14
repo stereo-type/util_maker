@@ -178,7 +178,7 @@
           elements.version.textContent = `${status.moduleVersion} (${status.moduleId})`;
           elements.action.textContent = status.actionName;
           elements.shortcut.textContent = status.shortcutStatus;
-          elements.build.textContent = ` Сборка: ${status.buildKind}.`;
+          elements.build.textContent = ` Версия ${status.appVersion}, сборка ${status.buildKind}.`;
           elements.path.textContent = status.modulePath;
           elements.log.textContent = status.logPath || "недоступен";
           elements.config.textContent = status.configPath || "недоступен";

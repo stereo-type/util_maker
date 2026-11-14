@@ -430,6 +430,7 @@ struct StatusPayload {
     shortcut_status: String,
     app_version: String,
     build_kind: String,
+    build_number: String,
     module_path: String,
     log_path: String,
     config_path: String,
@@ -1171,6 +1172,7 @@ fn get_status(app: AppHandle) -> Result<StatusPayload, String> {
             .unwrap_or_else(|| "неизвестно".to_owned()),
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
         build_kind: logging::build_kind().to_owned(),
+        build_number: logging::build_number().to_owned(),
         module_path: entry
             .executable
             .parent()

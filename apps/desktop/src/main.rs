@@ -9,6 +9,7 @@
 
 mod logging;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -21,6 +22,10 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
+};
+use util_maker_core::hotkeys::{
+    AssignmentRecord, Candidate, CheckResult, Confirmation, HotkeyPlatform, HotkeyRegistry,
+    HotkeyStore, Owner, RegistrationError, StoreError,
 };
 use util_maker_core::{ActionRef, InvokeOutcome, Registry};
 use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
@@ -37,6 +42,187 @@ const HOTKEY_ID: u32 = 1;
 #[derive(Default)]
 struct AppState {
     last_result: Mutex<Option<LastResult>>,
+}
+
+// --- Демонстрационный реестр шорткеев для редактора настроек ---
+
+#[derive(Default)]
+struct DemoStore {
+    records: Vec<AssignmentRecord>,
+    fail_saves: bool,
+}
+
+impl HotkeyStore for DemoStore {
+    fn load(&self) -> Result<Vec<AssignmentRecord>, StoreError> {
+        Ok(self.records.clone())
+    }
+
+    fn save(&mut self, records: &[AssignmentRecord]) -> Result<(), StoreError> {
+        if self.fail_saves {
+            return Err(StoreError("имитация отказа записи".to_owned()));
+        }
+        self.records = records.to_vec();
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct DemoPlatform {
+    registered: BTreeSet<String>,
+}
+
+impl HotkeyPlatform for DemoPlatform {
+    fn register(
+        &mut self,
+        hotkey: &util_maker_core::hotkeys::Hotkey,
+    ) -> Result<(), RegistrationError> {
+        self.registered.insert(hotkey.canonical());
+        Ok(())
+    }
+
+    fn unregister(&mut self, hotkey: &util_maker_core::hotkeys::Hotkey) {
+        self.registered.remove(&hotkey.canonical());
+    }
+}
+
+struct HotkeyDemo {
+    registry: Mutex<HotkeyRegistry<DemoStore, DemoPlatform>>,
+}
+
+impl HotkeyDemo {
+    fn new() -> Self {
+        let mut registry = HotkeyRegistry::open(DemoStore::default(), DemoPlatform::default())
+            .expect("демонстрационный реестр шорткеев");
+        for (combo, module, action) in [
+            ("Ctrl+Shift+1", "org.utilmaker.screenshot", "capture-region"),
+            ("Ctrl+Shift+2", "org.utilmaker.translator", "translate"),
+        ] {
+            if let Some((module_name, action_name)) = demo_target(module, action) {
+                let candidate =
+                    Candidate::new(combo, module, module_name, action, action_name, true);
+                let _ = registry.assign(&candidate, None);
+            }
+        }
+        Self {
+            registry: Mutex::new(registry),
+        }
+    }
+}
+
+fn demo_target(module: &str, action: &str) -> Option<(&'static str, &'static str)> {
+    match (module, action) {
+        ("org.utilmaker.screenshot", "capture-region") => Some(("Скриншоты", "Снять область")),
+        ("org.utilmaker.translator", "translate") => Some(("Переводчик", "Перевести текст")),
+        _ => None,
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HotkeyOwnerDto {
+    module_id: String,
+    module_name: String,
+    action_id: String,
+    action_name: String,
+    enabled: bool,
+}
+
+impl From<&Owner> for HotkeyOwnerDto {
+    fn from(owner: &Owner) -> Self {
+        Self {
+            module_id: owner.module_id.clone(),
+            module_name: owner.module_name.clone(),
+            action_id: owner.action_id.clone(),
+            action_name: owner.action_name.clone(),
+            enabled: owner.enabled,
+        }
+    }
+}
+
+impl From<HotkeyOwnerDto> for Owner {
+    fn from(owner: HotkeyOwnerDto) -> Self {
+        Self {
+            module_id: owner.module_id,
+            module_name: owner.module_name,
+            action_id: owner.action_id,
+            action_name: owner.action_name,
+            enabled: owner.enabled,
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HotkeyStateDto {
+    combo: String,
+    module_id: String,
+    module_name: String,
+    action_id: String,
+    action_name: String,
+    enabled: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum HotkeyCheckDto {
+    Available,
+    SameAssignment,
+    InternalConflict {
+        previous: HotkeyOwnerDto,
+        proposed: HotkeyOwnerDto,
+    },
+    SystemReserved {
+        combo: String,
+        function: String,
+    },
+    RegistrationRejected {
+        combo: String,
+        occupied: bool,
+    },
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HotkeyConfirmationDto {
+    combo: String,
+    expected_owner: HotkeyOwnerDto,
+}
+
+fn hotkey_state(state: &HotkeyDemo) -> Vec<HotkeyStateDto> {
+    let registry = state.registry.lock().expect("реестр шорткеев");
+    registry
+        .records()
+        .map(|record| HotkeyStateDto {
+            combo: record.combo.clone(),
+            module_id: record.module_id.clone(),
+            module_name: record.module_name.clone(),
+            action_id: record.action_id.clone(),
+            action_name: record.action_name.clone(),
+            enabled: record.enabled,
+        })
+        .collect()
+}
+
+fn candidate_for(combo: &str, module: &str, action: &str) -> Candidate {
+    let (module_name, action_name) = demo_target(module, action).unwrap_or(("Модуль", "Действие"));
+    Candidate::new(combo, module, module_name, action, action_name, true)
+}
+
+fn check_dto(result: CheckResult) -> HotkeyCheckDto {
+    match result {
+        CheckResult::Available => HotkeyCheckDto::Available,
+        CheckResult::SameAssignment => HotkeyCheckDto::SameAssignment,
+        CheckResult::InternalConflict { previous, proposed } => HotkeyCheckDto::InternalConflict {
+            previous: HotkeyOwnerDto::from(&previous),
+            proposed: HotkeyOwnerDto::from(&proposed),
+        },
+        CheckResult::SystemReserved { combo, function } => {
+            HotkeyCheckDto::SystemReserved { combo, function }
+        }
+        CheckResult::RegistrationRejected { combo, occupied } => {
+            HotkeyCheckDto::RegistrationRejected { combo, occupied }
+        }
+    }
 }
 
 /// Регистрация прототипа: одно сочетание, пауза и повторная попытка.
@@ -122,6 +308,10 @@ fn main() {
             close_result,
             get_autostart,
             set_autostart,
+            hotkey_state_command,
+            check_hotkey,
+            assign_hotkey,
+            set_hotkey_save_failure,
             quit_app
         ])
         .setup(|app| {
@@ -129,6 +319,7 @@ fn main() {
             let (runtime, events) = ShortcutRuntime::start()?;
             let status = runtime.status.lock().expect("статус сочетания").clone();
             app.manage(runtime);
+            app.manage(HotkeyDemo::new());
             set_shortcut_status(app.handle(), &status);
             spawn_hotkey_listener(app.handle().clone(), events);
             let first_run = mark_and_check_first_run(app.handle())?;
@@ -613,6 +804,58 @@ fn close_result(app: AppHandle) {
     if let Some(window) = app.get_webview_window(RESULT_WINDOW) {
         let _ = window.close();
     }
+}
+
+#[tauri::command]
+fn hotkey_state_command(state: tauri::State<HotkeyDemo>) -> Vec<HotkeyStateDto> {
+    hotkey_state(&state)
+}
+
+#[tauri::command]
+fn check_hotkey(
+    state: tauri::State<HotkeyDemo>,
+    combo: String,
+    module_id: String,
+    action_id: String,
+) -> Result<HotkeyCheckDto, String> {
+    let candidate = candidate_for(&combo, &module_id, &action_id);
+    let mut registry = state.registry.lock().expect("реестр шорткеев");
+    registry
+        .check(&candidate)
+        .map(check_dto)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn assign_hotkey(
+    state: tauri::State<HotkeyDemo>,
+    combo: String,
+    module_id: String,
+    action_id: String,
+    confirmation: Option<HotkeyConfirmationDto>,
+) -> Result<Vec<HotkeyStateDto>, String> {
+    let candidate = candidate_for(&combo, &module_id, &action_id);
+    let confirmation = confirmation.map(|confirmation| {
+        let canonical = util_maker_core::hotkeys::Hotkey::parse(&confirmation.combo)
+            .map(|hotkey| hotkey.canonical())
+            .unwrap_or(confirmation.combo.clone());
+        Confirmation {
+            combo: canonical,
+            expected_owner: confirmation.expected_owner.into(),
+        }
+    });
+    let mut registry = state.registry.lock().expect("реестр шорткеев");
+    registry
+        .assign(&candidate, confirmation.as_ref())
+        .map_err(|error| error.to_string())?;
+    drop(registry);
+    Ok(hotkey_state(&state))
+}
+
+#[tauri::command]
+fn set_hotkey_save_failure(state: tauri::State<HotkeyDemo>, enabled: bool) {
+    let mut registry = state.registry.lock().expect("реестр шорткеев");
+    registry.store_mut().fail_saves = enabled;
 }
 
 #[tauri::command]

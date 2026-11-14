@@ -7,6 +7,9 @@ members = [
     "crates/fixture-module",
     "crates/platform",
     "crates/packages",
+    "crates/screenshots",
+    "crates/translator",
+    "crates/providers",
     "apps/desktop",
 ]
 

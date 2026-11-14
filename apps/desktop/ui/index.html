@@ -121,6 +121,37 @@
         <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
       </section>
 
+      <section class="card" aria-labelledby="hotkeys-title">
+        <h2 class="module-name" id="hotkeys-title" style="margin-bottom: 8px">Шорткеи</h2>
+        <p class="hint" style="margin-top: 0">
+          Демонстрационный реестр. Показаны оба владельца, системные сочетания блокируются до регистрации.
+        </p>
+        <div id="hotkey-list"></div>
+        <div id="hotkey-editor" hidden>
+          <label class="check" style="margin-top: 12px">
+            <span>Сочетание</span>
+            <input id="hotkey-input" type="text" autocomplete="off" spellcheck="false" style="flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit;" />
+          </label>
+          <div class="actions" style="margin-top: 10px">
+            <button id="hotkey-check" type="button">Проверить</button>
+            <button class="primary" id="hotkey-save" type="button" disabled>Сохранить</button>
+            <button id="hotkey-cancel" type="button">Отмена</button>
+          </div>
+          <p class="hint" id="hotkey-status" aria-live="polite"></p>
+          <div id="hotkey-conflict" hidden>
+            <p class="result error" id="hotkey-conflict-text"></p>
+            <div class="actions" style="margin-top: 0">
+              <button id="conflict-cancel" type="button">Отмена</button>
+              <button class="primary" id="conflict-reassign" type="button">Переназначить</button>
+            </div>
+          </div>
+        </div>
+        <label class="check" style="margin-top: 14px">
+          <input type="checkbox" id="hotkey-save-failure" />
+          Имитировать отказ записи
+        </label>
+      </section>
+
       <section class="card" aria-labelledby="startup-title">
         <h2 class="module-name" id="startup-title" style="margin-bottom: 12px">Запуск</h2>
         <label class="check">
@@ -240,9 +271,214 @@
 
       elements.close.addEventListener("click", () => invoke("close_settings"));
       elements.quit.addEventListener("click", () => invoke("quit_app"));
+      const hotkeyList = document.getElementById("hotkey-list");
+      const hotkeyEditor = document.getElementById("hotkey-editor");
+      const hotkeyInput = document.getElementById("hotkey-input");
+      const hotkeyStatus = document.getElementById("hotkey-status");
+      const hotkeySave = document.getElementById("hotkey-save");
+      const hotkeyConflict = document.getElementById("hotkey-conflict");
+      const hotkeyConflictText = document.getElementById("hotkey-conflict-text");
+      const hotkeyFailure = document.getElementById("hotkey-save-failure");
+      let hotkeyTarget = null;
+      let hotkeyCheck = null;
+
+      function hotkeyKey(event) {
+        const code = event.code || "";
+        if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+        if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+        if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+        const named = {
+          " ": "Space", Escape: "Escape", Delete: "Delete", Backspace: "Backspace",
+          Enter: "Enter", Tab: "Tab", ArrowUp: "ArrowUp", ArrowDown: "ArrowDown",
+          ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight", Home: "Home", End: "End",
+          PageUp: "PageUp", PageDown: "PageDown", Insert: "Insert",
+          Space: "Space", NumpadAdd: "Add", NumpadSubtract: "Subtract",
+        };
+        if (named[code]) return named[code];
+        const key = event.key;
+        if (key === "Control" || key === "Shift" || key === "Alt" || key === "Meta") return "";
+        if (named[key]) return named[key];
+        if (key.length === 1) return key.toUpperCase();
+        return "";
+      }
+
+      function setHotkeyStatus(text, kind) {
+        hotkeyStatus.textContent = text;
+        hotkeyStatus.className = "hint" + (kind ? " " + kind : "");
+      }
+
+      function closeHotkeyEditor() {
+        hotkeyEditor.hidden = true;
+        hotkeyTarget = null;
+        hotkeyCheck = null;
+        hotkeyConflict.hidden = true;
+      }
+
+      function renderHotkeyRecords(records) {
+        hotkeyList.innerHTML = "";
+        if (!records.length) {
+          hotkeyList.textContent = "Назначений нет.";
+          return;
+        }
+        for (const record of records) {
+          const row = document.createElement("div");
+          row.className = "row";
+          row.style.marginTop = "8px";
+          const text = document.createElement("div");
+          const title = document.createElement("strong");
+          title.textContent = record.actionName;
+          const detail = document.createElement("div");
+          detail.className = "hint";
+          detail.textContent = `${record.moduleName} · ${record.combo}${record.enabled ? "" : " · модуль отключён"}`;
+          text.append(title, detail);
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Изменить";
+          button.addEventListener("click", () => openHotkeyEditor(record));
+          row.append(text, button);
+          hotkeyList.append(row);
+        }
+      }
+
+      async function refreshHotkeys() {
+        try {
+          renderHotkeyRecords(await invoke("hotkey_state_command"));
+        } catch (error) {
+          hotkeyList.textContent = `Не удалось прочитать шорткеи: ${error}`;
+        }
+      }
+
+      function openHotkeyEditor(record) {
+        hotkeyTarget = { moduleId: record.moduleId, actionId: record.actionId };
+        hotkeyCheck = null;
+        hotkeyEditor.hidden = false;
+        hotkeyConflict.hidden = true;
+        hotkeyInput.value = record.combo;
+        hotkeySave.disabled = true;
+        setHotkeyStatus("Нажмите клавиши или введите сочетание и нажмите «Проверить».", "");
+        hotkeyInput.focus();
+        hotkeyInput.select();
+        checkHotkey();
+      }
+
+      async function checkHotkey() {
+        if (!hotkeyTarget) return;
+        try {
+          hotkeyCheck = await invoke("check_hotkey", {
+            combo: hotkeyInput.value,
+            moduleId: hotkeyTarget.moduleId,
+            actionId: hotkeyTarget.actionId,
+          });
+        } catch (error) {
+          hotkeyCheck = null;
+          hotkeySave.disabled = true;
+          hotkeyConflict.hidden = true;
+          setHotkeyStatus(`Некорректное сочетание: ${error}`, "error");
+          return;
+        }
+        hotkeySave.disabled = true;
+        hotkeyConflict.hidden = true;
+        switch (hotkeyCheck.kind) {
+          case "available":
+            setHotkeyStatus("Сочетание свободно. Можно сохранить.", "ok");
+            hotkeySave.disabled = false;
+            break;
+          case "sameAssignment":
+            setHotkeyStatus("Сочетание уже назначено этому действию.", "");
+            break;
+          case "internalConflict": {
+            const previous = hotkeyCheck.previous;
+            const proposed = hotkeyCheck.proposed;
+            setHotkeyStatus("Сочетание занято другим действием.", "error");
+            hotkeyConflictText.textContent =
+              `${hotkeyInput.value}: «${previous.moduleName} — ${previous.actionName}» → ` +
+              `«${proposed.moduleName} — ${proposed.actionName}».`;
+            hotkeyConflict.hidden = false;
+            break;
+          }
+          case "systemReserved":
+            setHotkeyStatus(
+              `${hotkeyCheck.combo} — ${hotkeyCheck.function}. Сохранение и перенос запрещены.`,
+              "error"
+            );
+            break;
+          case "registrationRejected":
+            setHotkeyStatus(
+              hotkeyCheck.occupied
+                ? "Сочетание занято другой программой. Выберите другое."
+                : "Сочетание недоступно для глобального назначения. Выберите другое.",
+              "error"
+            );
+            break;
+        }
+      }
+
+      async function saveHotkey(confirmation) {
+        if (!hotkeyTarget) return;
+        hotkeySave.disabled = true;
+        try {
+          const records = await invoke("assign_hotkey", {
+            combo: hotkeyInput.value,
+            moduleId: hotkeyTarget.moduleId,
+            actionId: hotkeyTarget.actionId,
+            confirmation: confirmation || null,
+          });
+          renderHotkeyRecords(records);
+          closeHotkeyEditor();
+        } catch (error) {
+          hotkeySave.disabled = false;
+          setHotkeyStatus(`Не удалось сохранить: ${error}`, "error");
+        }
+      }
+
+      hotkeyInput.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeHotkeyEditor();
+          return;
+        }
+        const key = hotkeyKey(event);
+        if (!key) {
+          const modifiers = [];
+          if (event.ctrlKey) modifiers.push("Ctrl");
+          if (event.altKey) modifiers.push("Alt");
+          if (event.shiftKey) modifiers.push("Shift");
+          if (event.metaKey) modifiers.push("Win");
+          hotkeyInput.value = modifiers.join("+");
+          return;
+        }
+        if (event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) {
+          event.preventDefault();
+          const parts = [];
+          if (event.ctrlKey) parts.push("Ctrl");
+          if (event.altKey) parts.push("Alt");
+          if (event.shiftKey) parts.push("Shift");
+          if (event.metaKey) parts.push("Win");
+          parts.push(key);
+          hotkeyInput.value = parts.join("+");
+          checkHotkey();
+        }
+      });
+
+      document.getElementById("hotkey-check").addEventListener("click", checkHotkey);
+      document.getElementById("hotkey-save").addEventListener("click", () => saveHotkey(null));
+      document.getElementById("hotkey-cancel").addEventListener("click", closeHotkeyEditor);
+      document.getElementById("conflict-cancel").addEventListener("click", closeHotkeyEditor);
+      document.getElementById("conflict-reassign").addEventListener("click", () => {
+        if (hotkeyCheck && hotkeyCheck.kind === "internalConflict") {
+          saveHotkey({ combo: hotkeyInput.value, expectedOwner: hotkeyCheck.previous });
+        }
+      });
+      hotkeyFailure.addEventListener("change", () => {
+        invoke("set_hotkey_save_failure", { enabled: hotkeyFailure.checked }).catch((error) =>
+          setHotkeyStatus(`Не удалось изменить режим записи: ${error}`, "error")
+        );
+      });
+
       window.addEventListener("DOMContentLoaded", loadStatus);
+      window.addEventListener("DOMContentLoaded", refreshHotkeys);
       loadStatus();
       loadAutostart();
+      refreshHotkeys();
     </script>
   </body>
 </html>

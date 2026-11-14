@@ -1,0 +1,9 @@
+[package]
+name = "util-maker-translator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Состояния выбора текста для микроприложения «Переводчик»"
+
+[dependencies]

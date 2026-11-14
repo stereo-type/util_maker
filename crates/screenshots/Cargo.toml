@@ -1,0 +1,11 @@
+[package]
+name = "util-maker-screenshots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Сведение кадра и аннотаций для микроприложения «Скриншоты»"
+
+[dependencies]
+image = { version = "0.25", default-features = false }
+thiserror.workspace = true

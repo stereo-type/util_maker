@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 1,
+  "id": "org.utilmaker.translator",
+  "publisher": "org.utilmaker",
+  "name": "Переводчик",
+  "version": "0.4.3",
+  "hostApi": ">=1.0.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "translator-module.exe",
+    "linux-x64": "translator-module"
+  },
+  "capabilities": [],
+  "actions": [
+    {
+      "id": "translate",
+      "name": "Перевести текст",
+      "description": "Перевести текущее выделение или явно введённый текст",
+      "recommendedHotkeys": [
+        "Ctrl+Shift+T"
+      ]
+    }
+  ]
+}

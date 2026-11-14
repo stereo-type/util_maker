@@ -4779,6 +4779,10 @@ dependencies = [
 [[package]]
 name = "util-maker-translator"
 version = "0.4.3"
+dependencies = [
+ "serde_json",
+ "util-maker-sdk",
+]
 
 [[package]]
 name = "uuid"

@@ -38,6 +38,26 @@ pub enum BlockReason {
     ContextLost,
 }
 
+impl BlockReason {
+    /// Машинный код причины для данных ответа процесса.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Password => "password-field",
+            Self::ContextLost => "context-lost",
+        }
+    }
+
+    /// Короткое объяснение для пользователя.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Password => "Поле пароля защищено: чтение выделения и перевод запрещены.",
+            Self::ContextLost => {
+                "Исходное окно потеряло контекст: выделение недоступно, запрос не отправлен."
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Phase {
     #[default]

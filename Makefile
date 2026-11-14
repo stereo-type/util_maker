@@ -10,6 +10,13 @@ CONTROL_SAMPLE_PLATFORM ?= linux-x64
 EXAMPLE_PACKAGE_DIR ?= dist/example-plugin
 EXAMPLE_VERSION ?= 0.1.0
 EXAMPLE_PLATFORM ?= linux-x64
+PACKAGE_SOURCE ?=
+PACKAGE_MANIFEST ?=
+PACKAGE_OUTPUT ?=
+PACKAGE_PRIVATE_KEY ?=
+PACKAGE_VERSION ?=
+PACKAGE_PLATFORM ?=
+PACKAGE_EXPORT_ARGS = $(if $(PACKAGE_VERSION),--version '$(PACKAGE_VERSION)') $(if $(PACKAGE_PLATFORM),--platform '$(PACKAGE_PLATFORM)')
 VERSION := $(shell sed -n 's/^  "version": "\([^"]*\)".*/\1/p' apps/desktop/tauri.conf.json | head -n 1)
 export CMD
 
@@ -26,7 +33,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
-	version check-version icons control-samples example-package windows-image build-windows
+	version check-version icons control-samples example-package package-export windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -41,6 +48,7 @@ help:
 		'make icons  — пересоздать иконки приложения' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
+		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
 		'make build-windows  — собрать NSIS-установщик в dist/ (Linux Docker, BUILD_KIND=dev)'
 
 dev-image:
@@ -90,6 +98,13 @@ control-samples: dev-image
 
 example-package: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "EXAMPLE_PACKAGE_DIR='$(EXAMPLE_PACKAGE_DIR)' EXAMPLE_VERSION='$(EXAMPLE_VERSION)' EXAMPLE_PLATFORM='$(EXAMPLE_PLATFORM)' sh /workspace/scripts/make-example-package.sh"
+
+package-export: dev-image
+	@test -n "$(PACKAGE_SOURCE)" || { echo 'Укажите PACKAGE_SOURCE=<каталог полезной нагрузки>'; exit 2; }
+	@test -n "$(PACKAGE_MANIFEST)" || { echo 'Укажите PACKAGE_MANIFEST=<путь к manifest.json>'; exit 2; }
+	@test -n "$(PACKAGE_OUTPUT)" || { echo 'Укажите PACKAGE_OUTPUT=<путь к .umpkg>'; exit 2; }
+	@test -n "$(PACKAGE_PRIVATE_KEY)" || { echo 'Укажите PACKAGE_PRIVATE_KEY=<закрытый ключ издателя>'; exit 2; }
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo run --quiet -p util-maker-packages --bin util-maker-package -- export --source '$(PACKAGE_SOURCE)' --manifest '$(PACKAGE_MANIFEST)' --output '$(PACKAGE_OUTPUT)' --private-key '$(PACKAGE_PRIVATE_KEY)' $(PACKAGE_EXPORT_ARGS)"
 
 windows-image:
 	docker build --tag "$(WINDOWS_IMAGE)" docker/windows

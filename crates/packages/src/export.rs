@@ -74,6 +74,10 @@ pub enum ExportError {
     MissingFile { path: String },
     #[error("выходной файл не должен находиться внутри каталога пакета")]
     OutputInsideSource,
+    #[error("закрытый ключ не должен находиться внутри каталога пакета: {0}")]
+    PrivateKeyInsideSource(String),
+    #[error("выходной файл не должен совпадать с закрытым ключом")]
+    OutputIsPrivateKey,
     #[error("ключ не принадлежит издателю {0}")]
     PublisherMismatch(String),
     #[error("созданный пакет не прошёл проверку: {0}")]
@@ -110,6 +114,27 @@ fn hash_file(path: &Path) -> Result<String, ExportError> {
         hasher.update(&buffer[..read]);
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+/// Проверяет, что закрытый ключ не попадёт в полезную нагрузку и что выходной
+/// файл не заменит сам ключ. Каталоги сравниваются после `canonicalize`, чтобы
+/// символические ссылки не обходили проверку.
+pub fn ensure_key_is_outside_package(
+    private_key: &Path,
+    source: &Path,
+    output: &Path,
+) -> Result<(), ExportError> {
+    let source = source.canonicalize()?;
+    let key = private_key.canonicalize()?;
+    if key.starts_with(&source) {
+        return Err(ExportError::PrivateKeyInsideSource(
+            private_key.display().to_string(),
+        ));
+    }
+    if output.canonicalize().is_ok_and(|output| output == key) {
+        return Err(ExportError::OutputIsPrivateKey);
+    }
+    Ok(())
 }
 
 /// Экспортирует каталог и проверяет результат тем же кодом, что и установка.
@@ -465,6 +490,35 @@ mod tests {
             .expect_err("экспорт без модуля");
         assert!(matches!(error, ExportError::MissingEntrypoint { .. }));
         assert_eq!(fs::read(&output).expect("пакет сохранился"), previous);
+        let mut trust = TrustStore::new();
+        trust
+            .add_publisher(PUBLISHER, key.verifying_key().to_bytes())
+            .expect("ключ");
+        verify_path(&output, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .expect("прежний пакет остался пригодным");
+    }
+
+    #[test]
+    fn private_key_inside_source_is_rejected() {
+        let temp = workspace();
+        let source = temp.path().join("source");
+        let key_path = source.join("private-key.json");
+        fs::write(&key_path, b"secret").expect("ключ");
+        let error =
+            ensure_key_is_outside_package(&key_path, &source, &temp.path().join("control.umpkg"))
+                .expect_err("ключ внутри каталога");
+        assert!(matches!(error, ExportError::PrivateKeyInsideSource(_)));
+    }
+
+    #[test]
+    fn output_matching_private_key_is_rejected() {
+        let temp = workspace();
+        let source = temp.path().join("source");
+        let key_path = temp.path().join("private-key.json");
+        fs::write(&key_path, b"secret").expect("ключ");
+        let error = ensure_key_is_outside_package(&key_path, &source, &key_path)
+            .expect_err("выход совпал с ключом");
+        assert!(matches!(error, ExportError::OutputIsPrivateKey));
     }
 
     #[cfg(unix)]

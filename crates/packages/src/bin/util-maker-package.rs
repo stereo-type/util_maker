@@ -29,7 +29,9 @@ use rand_core::OsRng;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use util_maker_packages::{export_package, verify_path, ExportOptions, TrustStore};
+use util_maker_packages::{
+    ensure_key_is_outside_package, export_package, verify_path, ExportOptions, TrustStore,
+};
 use util_maker_sdk::HOST_API_VERSION;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -109,6 +111,7 @@ fn export(flags: &Flags) -> Result<(), Box<dyn Error>> {
     let output = PathBuf::from(flags.required("output")?);
     let version = flags.optional("version");
     let platform = flags.optional("platform");
+    ensure_key_is_outside_package(&private_path, &source, &output)?;
     let result = export_package(&ExportOptions {
         source: &source,
         manifest: &manifest,

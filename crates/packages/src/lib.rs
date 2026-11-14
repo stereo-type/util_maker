@@ -19,7 +19,9 @@ use util_maker_sdk::manifest::Manifest;
 use util_maker_sdk::ManifestError;
 use zip::ZipArchive;
 
-pub use export::{export_package, ExportError, ExportOptions, ExportResult};
+pub use export::{
+    ensure_key_is_outside_package, export_package, ExportError, ExportOptions, ExportResult,
+};
 
 /// Имя манифеста внутри архива.
 pub const MANIFEST_ENTRY: &str = "manifest.json";

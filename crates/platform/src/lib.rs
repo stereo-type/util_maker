@@ -11,6 +11,9 @@ use std::time::Duration;
 use util_maker_core::hotkeys::{system_function, Hotkey};
 
 pub mod autostart;
+pub mod capture;
+
+pub use capture::{ScreenService, ScreenSource, ScreenSourceError};
 
 /// Отказ регистрации, различимый интерфейсом.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,29 @@ mod imp;
 #[cfg(not(windows))]
 #[path = "stub.rs"]
 mod imp;
+
+#[cfg(windows)]
+#[path = "windows_capture.rs"]
+mod native_capture;
+#[cfg(not(windows))]
+use capture::UnsupportedScreen as NativeScreen;
+
+#[cfg(windows)]
+pub type NativeScreenService = ScreenService<native_capture::WindowsScreen>;
+#[cfg(not(windows))]
+pub type NativeScreenService = ScreenService<NativeScreen>;
+
+/// Создаёт службу захвата с нативным источником текущей ОС.
+pub fn screen_service() -> NativeScreenService {
+    #[cfg(windows)]
+    {
+        ScreenService::new(native_capture::WindowsScreen)
+    }
+    #[cfg(not(windows))]
+    {
+        ScreenService::new(NativeScreen)
+    }
+}
 
 /// Служба глобальных сочетаний.
 pub struct HotkeyService {

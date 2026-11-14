@@ -11,8 +11,8 @@ pub mod server;
 
 pub use host::{
     host_methods, BufferRef, DeniedHost, FrameOrigin, FrameRef, FrameRegion, FrameRequest,
-    HostBridge, HostCall, HostCallContext, HostCallError, HostHandler, FRAME_FORMAT_BGRA8,
-    HOST_CALL_METHOD,
+    HostBridge, HostCall, HostCallContext, HostCallError, HostHandler, MonitorGeometry,
+    ScreenGeometry, FRAME_FORMAT_BGRA8, HOST_CALL_METHOD,
 };
 pub use manifest::{
     Action, FormCommand, FormState, Manifest, ManifestError, PackageFile, SecretPresence,

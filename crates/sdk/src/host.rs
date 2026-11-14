@@ -164,6 +164,29 @@ pub struct FrameRef {
     pub origin: FrameOrigin,
     pub scale_factor: f64,
     pub expires_in_ms: u32,
+    /// Геометрия виртуального рабочего стола в физических пикселях. Старые
+    /// ответы без неё остаются совместимыми.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<ScreenGeometry>,
+}
+
+/// Положение и масштаб одного монитора в физических пикселях виртуального
+/// рабочего стола. Порядок элементов соответствует системному перечислению;
+/// для запроса используйте `primary` или индекс.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorGeometry {
+    pub rect: FrameRegion,
+    pub scale_factor: f64,
+    pub primary: bool,
+}
+
+/// Единая геометрия виртуального рабочего стола и всех его мониторов.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenGeometry {
+    pub virtual_screen: FrameRegion,
+    pub monitors: Vec<MonitorGeometry>,
 }
 
 /// Начало кадра в координатах рабочего стола.
@@ -199,6 +222,36 @@ mod tests {
             origin: FrameOrigin { x: 0, y: 0 },
             scale_factor: 1.0,
             expires_in_ms: 5_000,
+            geometry: Some(ScreenGeometry {
+                virtual_screen: FrameRegion {
+                    x: -1920,
+                    y: 0,
+                    width: 3840,
+                    height: 1080,
+                },
+                monitors: vec![
+                    MonitorGeometry {
+                        rect: FrameRegion {
+                            x: -1920,
+                            y: 0,
+                            width: 1920,
+                            height: 1080,
+                        },
+                        scale_factor: 1.0,
+                        primary: false,
+                    },
+                    MonitorGeometry {
+                        rect: FrameRegion {
+                            x: 0,
+                            y: 0,
+                            width: 1920,
+                            height: 1080,
+                        },
+                        scale_factor: 1.5,
+                        primary: true,
+                    },
+                ],
+            }),
         };
         let text = serde_json::to_string(&frame).unwrap();
         assert!(text.len() < 512);

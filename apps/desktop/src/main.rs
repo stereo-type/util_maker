@@ -27,7 +27,9 @@ use util_maker_core::hotkeys::{
     AssignmentRecord, Candidate, CheckResult, Confirmation, HotkeyPlatform, HotkeyRegistry,
     HotkeyStore, Owner, RegistrationError, StoreError,
 };
-use util_maker_core::{ActionRef, InvokeOutcome, ModuleEntry, Registry};
+use util_maker_core::{
+    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
+};
 use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
 use util_maker_sdk::{protocol::InvocationSource, Manifest};
 
@@ -731,11 +733,20 @@ fn invoke_action(
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    // Диспетчер живёт ровно один вызов: кадры и буферы освобождаются вместе
+    // с ним, а параллельные действия не блокируют друг друга на время IPC.
+    let mut host = HostDispatcher::new(util_maker_platform::screen_service());
     state
         .catalog
         .registry
-        .invoke(target, source, INVOKE_TIMEOUT, Some(logging::logger()))
-        .map_err(|error| error.to_string())
+        .invoke_session(
+            target,
+            InvocationContext::new(source),
+            INVOKE_TIMEOUT,
+            Some(logging::logger()),
+            &mut host,
+        )
+        .map_err(|failure| failure.message)
 }
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {

@@ -142,6 +142,31 @@ impl PackageStore {
         Ok(next)
     }
 
+    /// Публикует активную версию в плоский каталог модулей хоста.
+    pub fn publish_to(&self, id: &str, target_root: &Path) -> Result<PathBuf, PackageError> {
+        let active = self
+            .state
+            .modules
+            .get(id)
+            .ok_or_else(|| PackageError::Install(format!("модуль {id} не установлен")))?;
+        let source = active
+            .manifest_path
+            .parent()
+            .ok_or_else(|| PackageError::Install("у манифеста нет каталога".to_owned()))?;
+        fs::create_dir_all(target_root).map_err(PackageError::Io)?;
+        let target = target_root.join(id);
+        let temp = target_root.join(format!(".tmp-{id}"));
+        if temp.exists() {
+            fs::remove_dir_all(&temp).map_err(PackageError::Io)?;
+        }
+        copy_directory(source, &temp)?;
+        if target.exists() {
+            fs::remove_dir_all(&target).map_err(PackageError::Io)?;
+        }
+        fs::rename(&temp, &target).map_err(PackageError::Io)?;
+        Ok(target.join(MANIFEST_ENTRY))
+    }
+
     /// Удаляет активную версию и её историю; повторный вызов безопасен.
     pub fn remove(&mut self, id: &str) -> Result<bool, PackageError> {
         let Some(active) = self.state.modules.remove(id) else {
@@ -334,6 +359,21 @@ impl PackageStore {
     }
 }
 
+fn copy_directory(source: &Path, target: &Path) -> Result<(), PackageError> {
+    fs::create_dir_all(target).map_err(PackageError::Io)?;
+    for entry in fs::read_dir(source).map_err(PackageError::Io)? {
+        let entry = entry.map_err(PackageError::Io)?;
+        let path = entry.path();
+        let destination = target.join(entry.file_name());
+        if path.is_dir() {
+            copy_directory(&path, &destination)?;
+        } else {
+            fs::copy(&path, &destination).map_err(PackageError::Io)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +520,21 @@ mod tests {
             store.versions("com.example.versions"),
             vec!["0.1.0", "0.2.0"]
         );
+    }
+
+    #[test]
+    fn publishes_active_version_to_flat_catalog() {
+        let (package_path, trust, root) =
+            package("com.example.publish", "com.example", "0.1.0", 11);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&package_path, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        let catalog = root.join("catalog");
+        let manifest = store.publish_to("com.example.publish", &catalog).unwrap();
+        assert!(manifest.is_file());
+        assert!(catalog.join("com.example.publish/plugin").is_file());
     }
 
     #[test]

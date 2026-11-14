@@ -4,6 +4,13 @@
 //! вырезает выбранный прямоугольник и наносит аннотации в тех же физических
 //! пикселях; панель и маркеры выбора в результат не попадают.
 
+pub mod editor;
+
+pub use editor::{
+    BeginOutcome, ClipboardError, ClipboardSink, CopyOutcome, EditorError, EditorPhase,
+    EditorSession,
+};
+
 use image::{Rgba, RgbaImage};
 
 /// Точка в координатах виртуального рабочего стола (может быть отрицательной).

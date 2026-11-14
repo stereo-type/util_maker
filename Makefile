@@ -33,7 +33,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
-	version check-version bump-version build-windows-rise icons control-samples example-package package-export windows-image build-windows
+	version check-version bump-version build-windows-rise icons screenshot-check control-samples example-package package-export windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -48,6 +48,7 @@ help:
 		'make bump-version VERSION=x.y.z  — поднять версию в Cargo.toml, tauri.conf.json и установщике' \
 		'make build-windows-rise  — поднять patch-версию и сразу собрать установщик' \
 		'make icons  — пересоздать иконки приложения' \
+		'make screenshot-check  — процесс, редактор и манифест плагина «Скриншоты»' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
 		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
@@ -89,6 +90,7 @@ bump-version:
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' apps/desktop/tauri.conf.json
 	@sed -i 's/!define VERSION "[^"]*"/!define VERSION "$(VERSION)"/' installer/util-maker.nsi
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/control/manifest.json
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screenshot/manifest.json
 	@sed -i 's/Util Maker — прототип [0-9][0-9.]*/Util Maker — прототип $(VERSION)/' installer/README.txt
 	@echo "Версия $(VERSION) записана в Cargo.toml, tauri.conf.json и установщик. Проверьте make check-version."
 
@@ -113,6 +115,9 @@ check: check-version fmt lint test
 
 icons:
 	python3 scripts/make-icons.py
+
+screenshot-check: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-screenshots && cargo test -p util-maker-core --test screenshot_module"
 
 control-samples: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "CONTROL_SAMPLES_DIR='$(CONTROL_SAMPLES_DIR)' CONTROL_SAMPLE_VERSIONS='$(CONTROL_SAMPLE_VERSIONS)' CONTROL_SAMPLE_PLATFORM='$(CONTROL_SAMPLE_PLATFORM)' sh /workspace/scripts/make-control-samples.sh"

@@ -4,8 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Сведение кадра и аннотаций для микроприложения «Скриншоты»"
+description = "Плагин «Скриншоты»: процесс, сведение кадра и аннотаций"
+
+[[bin]]
+name = "screenshot-plugin"
+path = "src/main.rs"
 
 [dependencies]
 image = { version = "0.25", default-features = false }
 thiserror.workspace = true
+serde_json.workspace = true
+util-maker-sdk.workspace = true

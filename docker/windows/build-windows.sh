@@ -18,8 +18,8 @@ export CARGO_TARGET_DIR="$target_dir"
 
 echo "Util Maker $version: сборка x86_64-pc-windows-msvc, тип ${UTIL_MAKER_BUILD:-dev}"
 cargo xwin build --release --target x86_64-pc-windows-msvc \
-    -p util-maker-desktop -p util-maker-control-module \
-    --bin util-maker-desktop --bin control-module
+    -p util-maker-desktop -p util-maker-control-module -p util-maker-screenshots \
+    --bin util-maker-desktop --bin control-module --bin screenshot-plugin
 
 exe="$target_dir/x86_64-pc-windows-msvc/release/util-maker-desktop.exe"
 module="$target_dir/x86_64-pc-windows-msvc/release/control-module.exe"

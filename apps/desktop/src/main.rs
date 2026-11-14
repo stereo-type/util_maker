@@ -1184,6 +1184,18 @@ fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
         .remove(&plugin_id)
         .map_err(|error| error.to_string())?;
     drop(manager);
+    if removed && plugin_id == CONTROL_MODULE_ID {
+        if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+            runtime
+                .service
+                .lock()
+                .expect("служба сочетаний")
+                .unregister(HOTKEY_ID);
+            runtime.registered.store(false, Ordering::SeqCst);
+            runtime.paused.store(true, Ordering::SeqCst);
+        }
+        set_shortcut_status(&app, "пакет удалён");
+    }
     let _ = refresh_plugins_inner(&app);
     Ok(removed)
 }

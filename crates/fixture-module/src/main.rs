@@ -13,7 +13,10 @@ use serde_json::{json, Value};
 const MODULE_ID: &str = "org.utilmaker.fixture";
 
 fn main() {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "ok".to_owned());
+    let spec = std::env::args().nth(1).unwrap_or_else(|| "ok".to_owned());
+    let mut parts = spec.splitn(2, '@');
+    let mode = parts.next().unwrap_or("ok");
+    let module_id = parts.next().unwrap_or(MODULE_ID).to_owned();
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     let mut first_initialize = true;
@@ -34,7 +37,14 @@ fn main() {
 
         match method {
             "initialize" => {
-                match mode.as_str() {
+                if mode == "crash-init" {
+                    std::process::exit(3);
+                }
+                if mode == "stderr-secret-init" {
+                    eprintln!("Authorization: Bearer secret-key-123");
+                    std::process::exit(4);
+                }
+                match mode {
                     "silent" => {
                         // Процесс жив, но не подтверждает готовность.
                         continue;
@@ -78,7 +88,7 @@ fn main() {
                             "id": id,
                             "result": {
                                 "apiVersion": api_version,
-                                "moduleId": MODULE_ID,
+                                "moduleId": module_id.clone(),
                                 "capabilities": []
                             }
                         }),
@@ -88,6 +98,20 @@ fn main() {
             "invoke" => {
                 if mode == "crash" {
                     std::process::exit(2);
+                }
+                if mode == "rpc-error" {
+                    write_response(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": 2001,
+                                "message": "сбой перевода Authorization: Bearer secret-key-123 https://example.test/v1?text=секрет"
+                            }
+                        }),
+                    );
+                    continue;
                 }
                 if mode == "hang" {
                     sleep(Duration::from_secs(30));
@@ -100,11 +124,16 @@ fn main() {
                     .and_then(|params| params.get("callId"))
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                if mode == "host-call" || mode == "host-context" {
+                if mode == "host-call" || mode == "host-context" || mode == "host-secret" {
                     let requested_call = if mode == "host-context" {
                         "stale-call"
                     } else {
                         call_id
+                    };
+                    let (capability, method, params) = if mode == "host-secret" {
+                        ("secret.read", "secret.read", json!({"key": "token"}))
+                    } else {
+                        ("screen.frame", "frame.capture", json!({}))
                     };
                     write_response(
                         &mut stdout,
@@ -114,9 +143,9 @@ fn main() {
                             "method": "host.call",
                             "params": {
                                 "callId": requested_call,
-                                "capability": "screen.frame",
-                                "method": "frame.capture",
-                                "params": {}
+                                "capability": capability,
+                                "method": method,
+                                "params": params
                             }
                         }),
                     );

@@ -29,6 +29,13 @@ pub struct LogEntry {
     pub error_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Миллисекунды от события вызова до первого видимого кадра. Заполняется
+    /// оболочкой; `duration_ms` всего вызова этот момент не заменяет.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_frame_ms: Option<u64>,
+    /// Был ли процесс плагина запущен для этого вызова.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cold: Option<bool>,
 }
 
 impl LogEntry {
@@ -50,12 +57,21 @@ impl LogEntry {
             outcome: outcome.into(),
             error_code: error_code.map(str::to_owned),
             message: None,
+            first_frame_ms: None,
+            cold: None,
         }
     }
 
     /// Добавляет очищенное пояснение ошибки.
     pub fn with_message(mut self, message: &str) -> Self {
         self.message = Some(sanitize(message));
+        self
+    }
+
+    /// Фиксирует первый кадр и признак холодного запуска процесса.
+    pub fn with_first_frame(mut self, first_frame_ms: u64, cold: bool) -> Self {
+        self.first_frame_ms = Some(first_frame_ms);
+        self.cold = Some(cold);
         self
     }
 }
@@ -195,7 +211,8 @@ mod tests {
             42,
             "error",
             Some("module_timeout"),
-        );
+        )
+        .with_first_frame(17, true);
         log.record(&entry).expect("запись");
         let lines = read_lines(log.path());
         assert_eq!(lines.len(), 1);
@@ -204,6 +221,8 @@ mod tests {
         assert_eq!(lines[0].action_id.as_deref(), Some("ping"));
         assert_eq!(lines[0].duration_ms, Some(42));
         assert_eq!(lines[0].error_code.as_deref(), Some("module_timeout"));
+        assert_eq!(lines[0].first_frame_ms, Some(17));
+        assert_eq!(lines[0].cold, Some(true));
         let _ = fs::remove_dir_all(directory);
     }
 

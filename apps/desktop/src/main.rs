@@ -117,6 +117,10 @@ fn demo_target(module: &str, action: &str) -> Option<(&'static str, &'static str
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HotkeyOwnerDto {
@@ -125,6 +129,10 @@ struct HotkeyOwnerDto {
     action_id: String,
     action_name: String,
     enabled: bool,
+    #[serde(default = "default_true")]
+    available: bool,
+    #[serde(default)]
+    registration_error: Option<String>,
 }
 
 impl From<&Owner> for HotkeyOwnerDto {
@@ -135,6 +143,8 @@ impl From<&Owner> for HotkeyOwnerDto {
             action_id: owner.action_id.clone(),
             action_name: owner.action_name.clone(),
             enabled: owner.enabled,
+            available: owner.available,
+            registration_error: owner.registration_error.clone(),
         }
     }
 }
@@ -147,6 +157,8 @@ impl From<HotkeyOwnerDto> for Owner {
             action_id: owner.action_id,
             action_name: owner.action_name,
             enabled: owner.enabled,
+            available: owner.available,
+            registration_error: owner.registration_error,
         }
     }
 }
@@ -169,7 +181,7 @@ enum HotkeyCheckDto {
     SameAssignment,
     InternalConflict {
         previous: HotkeyOwnerDto,
-        proposed: HotkeyOwnerDto,
+        proposed: Box<HotkeyOwnerDto>,
     },
     SystemReserved {
         combo: String,
@@ -214,7 +226,7 @@ fn check_dto(result: CheckResult) -> HotkeyCheckDto {
         CheckResult::SameAssignment => HotkeyCheckDto::SameAssignment,
         CheckResult::InternalConflict { previous, proposed } => HotkeyCheckDto::InternalConflict {
             previous: HotkeyOwnerDto::from(&previous),
-            proposed: HotkeyOwnerDto::from(&proposed),
+            proposed: Box::new(HotkeyOwnerDto::from(proposed.as_ref())),
         },
         CheckResult::SystemReserved { combo, function } => {
             HotkeyCheckDto::SystemReserved { combo, function }

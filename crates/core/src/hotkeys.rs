@@ -5,6 +5,9 @@
 //! Это позволяет воспроизводить системный отказ и ошибку записи в тестах.
 
 use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -261,6 +264,10 @@ pub struct Owner {
     pub action_id: String,
     pub action_name: String,
     pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_error: Option<String>,
 }
 
 /// Кандидат на назначение сочетания.
@@ -300,6 +307,8 @@ impl Candidate {
             action_id: self.action_id.clone(),
             action_name: self.action_name.clone(),
             enabled: self.enabled,
+            available: true,
+            registration_error: None,
         }
     }
 }
@@ -309,7 +318,7 @@ impl Candidate {
 pub enum CheckResult {
     Available,
     SameAssignment,
-    InternalConflict { previous: Owner, proposed: Owner },
+    InternalConflict { previous: Owner, proposed: Box<Owner> },
     SystemReserved { combo: String, function: String },
     RegistrationRejected { combo: String, occupied: bool },
 }
@@ -390,6 +399,12 @@ pub struct AssignmentRecord {
     pub action_id: String,
     pub action_name: String,
     pub enabled: bool,
+    /// Действие и модуль ещё присутствуют в активном каталоге.
+    #[serde(default = "default_true")]
+    pub available: bool,
+    /// Причина, по которой регистрация не удалась, без пользовательских данных.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_error: Option<String>,
 }
 
 impl AssignmentRecord {
@@ -400,6 +415,36 @@ impl AssignmentRecord {
             action_id: self.action_id.clone(),
             action_name: self.action_name.clone(),
             enabled: self.enabled,
+            available: self.available,
+            registration_error: self.registration_error.clone(),
+        }
+    }
+}
+
+/// Актуальное состояние действия в каталоге пакетов.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionAvailability {
+    pub module_id: String,
+    pub module_name: String,
+    pub action_id: String,
+    pub action_name: String,
+    pub module_enabled: bool,
+}
+
+impl ActionAvailability {
+    pub fn new(
+        module_id: impl Into<String>,
+        module_name: impl Into<String>,
+        action_id: impl Into<String>,
+        action_name: impl Into<String>,
+        module_enabled: bool,
+    ) -> Self {
+        Self {
+            module_id: module_id.into(),
+            module_name: module_name.into(),
+            action_id: action_id.into(),
+            action_name: action_name.into(),
+            module_enabled,
         }
     }
 }
@@ -427,11 +472,109 @@ impl<S: HotkeyStore, P: HotkeyPlatform> HotkeyRegistry<S, P> {
                 )));
             }
         }
-        Ok(Self {
+        let mut registry = Self {
             records,
             store,
             platform,
-        })
+        };
+        registry.restore()?;
+        Ok(registry)
+    }
+
+    /// Регистрирует доступные привязки после запуска и запоминает причину
+    /// отказа. Сами назначения при этом не теряются.
+    pub fn restore(&mut self) -> Result<(), StoreError> {
+        self.resync_platform();
+        self.persist_store()
+    }
+
+    /// Обновляет сведения о действиях после установки, обновления или
+    /// отключения пакета. Возвращает восстановленные и ставшие недоступными
+    /// привязки.
+    pub fn sync_actions(&mut self, actions: &[ActionAvailability]) -> Result<(), AssignError> {
+        let previous = self.records.clone();
+        let available: BTreeMap<(String, String), &ActionAvailability> = actions
+            .iter()
+            .map(|action| ((action.module_id.clone(), action.action_id.clone()), action))
+            .collect();
+        for record in self.records.values_mut() {
+            match available.get(&(record.module_id.clone(), record.action_id.clone())) {
+                Some(action) => {
+                    record.module_name = action.module_name.clone();
+                    record.action_name = action.action_name.clone();
+                    record.available = true;
+                    record.enabled = action.module_enabled;
+                }
+                None => {
+                    record.available = false;
+                    record.enabled = false;
+                }
+            }
+        }
+        self.resync_platform();
+        if let Err(error) = self.persist() {
+            self.records = previous;
+            self.resync_platform();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Включает или отключает все привязки модуля, сохраняя их для возврата.
+    pub fn set_module_enabled(
+        &mut self,
+        module_id: &str,
+        enabled: bool,
+    ) -> Result<(), AssignError> {
+        let previous = self.records.clone();
+        for record in self.records.values_mut() {
+            if record.module_id == module_id {
+                record.enabled = enabled;
+            }
+        }
+        self.resync_platform();
+        if let Err(error) = self.persist() {
+            self.records = previous;
+            self.resync_platform();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn persist_store(&mut self) -> Result<(), StoreError> {
+        let records: Vec<_> = self.records.values().cloned().collect();
+        self.store.save(&records)
+    }
+
+    fn resync_platform(&mut self) {
+        let keys: Vec<_> = self.records.keys().cloned().collect();
+        for key in &keys {
+            if let Ok(hotkey) = Hotkey::parse(key) {
+                self.platform.unregister(&hotkey);
+            }
+        }
+        for key in keys {
+            let Some(record) = self.records.get_mut(&key) else {
+                continue;
+            };
+            let Ok(hotkey) = Hotkey::parse(&record.combo) else {
+                record.registration_error = Some("некорректное сочетание".to_owned());
+                continue;
+            };
+            if !record.enabled || !record.available {
+                record.registration_error = None;
+                continue;
+            }
+            match self.platform.register(&hotkey) {
+                Ok(()) => record.registration_error = None,
+                Err(RegistrationError::Occupied) => {
+                    record.registration_error = Some("сочетание занято".to_owned());
+                }
+                Err(RegistrationError::Unavailable(reason)) => {
+                    record.registration_error = Some(reason);
+                }
+            }
+        }
     }
 
     pub fn records(&self) -> impl Iterator<Item = &AssignmentRecord> {
@@ -477,7 +620,7 @@ impl<S: HotkeyStore, P: HotkeyPlatform> HotkeyRegistry<S, P> {
             }
             return Ok(CheckResult::InternalConflict {
                 previous: previous.owner(),
-                proposed: candidate.owner(),
+                proposed: Box::new(candidate.owner()),
             });
         }
         match self.platform.probe(&hotkey) {
@@ -581,8 +724,11 @@ impl<S: HotkeyStore, P: HotkeyPlatform> HotkeyRegistry<S, P> {
         }
 
         // Регистрация уже принадлежит ядру; меняем только маршрут. Если
-        // прежний владелец был отключён, сочетание нужно зарегистрировать.
-        if candidate.enabled && !previous.enabled {
+        // прежний владелец был отключён или недоступен, сочетание нужно
+        // зарегистрировать заново.
+        let previous_active =
+            previous.enabled && previous.available && previous.registration_error.is_none();
+        if candidate.enabled && !previous_active {
             self.platform
                 .register(&hotkey)
                 .map_err(|_| AssignError::RegistrationRejected {
@@ -590,7 +736,7 @@ impl<S: HotkeyStore, P: HotkeyPlatform> HotkeyRegistry<S, P> {
                     occupied: false,
                 })?;
         }
-        if !candidate.enabled && previous.enabled {
+        if !candidate.enabled && previous_active {
             self.platform.unregister(&hotkey);
         }
 
@@ -606,12 +752,14 @@ impl<S: HotkeyStore, P: HotkeyPlatform> HotkeyRegistry<S, P> {
                     action_id: previous.action_id.clone(),
                     action_name: previous.action_name.clone(),
                     enabled: previous.enabled,
+                    available: previous.available,
+                    registration_error: previous.registration_error.clone(),
                 },
             );
-            if candidate.enabled && !previous.enabled {
+            if candidate.enabled && !previous_active {
                 self.platform.unregister(&hotkey);
             }
-            if !candidate.enabled && previous.enabled {
+            if !candidate.enabled && previous_active {
                 let _ = self.platform.register(&hotkey);
             }
             return Err(error);
@@ -640,7 +788,7 @@ impl<S: HotkeyStore, P: HotkeyPlatform> HotkeyRegistry<S, P> {
             return Ok(false);
         }
         let removed = self.records.remove(&canonical).expect("запись существует");
-        if removed.enabled {
+        if removed.enabled && removed.available && removed.registration_error.is_none() {
             self.platform.unregister(&hotkey);
         }
         if let Err(error) = self.persist() {
@@ -658,6 +806,170 @@ impl<S: HotkeyStore, P: HotkeyPlatform> HotkeyRegistry<S, P> {
     }
 }
 
+/// Файловое хранилище назначений. Поддерживает новый массив записей и
+/// старый прототипный объект с одним сочетанием.
+#[derive(Debug, Clone)]
+pub struct JsonHotkeyStore {
+    path: PathBuf,
+}
+
+impl JsonHotkeyStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn read_records(&self, contents: &str) -> Result<Vec<AssignmentRecord>, StoreError> {
+        if contents.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        if let Ok(records) = serde_json::from_str::<Vec<AssignmentRecord>>(contents) {
+            return Ok(records);
+        }
+        if let Ok(document) = serde_json::from_str::<StoredDocument>(contents) {
+            let mut records = document.assignments;
+            records.extend(document.hotkeys);
+            if !records.is_empty() {
+                return Ok(records);
+            }
+            if let Some(combo) = document.shortcut.or(document.hotkey).or(document.combo) {
+                return Ok(vec![legacy_record(combo)]);
+            }
+        }
+        if let Ok(bindings) = serde_json::from_str::<BTreeMap<String, LegacyBinding>>(contents) {
+            if !bindings.is_empty() {
+                return Ok(bindings
+                    .into_iter()
+                    .map(|(combo, binding)| legacy_record_with(combo, binding))
+                    .collect());
+            }
+        }
+        Err(StoreError(format!(
+            "не удалось прочитать настройки сочетаний {}",
+            self.path.display()
+        )))
+    }
+}
+
+impl HotkeyStore for JsonHotkeyStore {
+    fn load(&self) -> Result<Vec<AssignmentRecord>, StoreError> {
+        match fs::read_to_string(&self.path) {
+            Ok(contents) => self.read_records(&contents),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(StoreError(format!(
+                "чтение {}: {error}",
+                self.path.display()
+            ))),
+        }
+    }
+
+    fn save(&mut self, records: &[AssignmentRecord]) -> Result<(), StoreError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| StoreError(format!("каталог {}: {error}", parent.display())))?;
+        }
+        let contents = serde_json::to_vec_pretty(records)
+            .map_err(|error| StoreError(format!("сериализация назначений: {error}")))?;
+        let temporary = self.path.with_extension("json.tmp");
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temporary)
+                .map_err(|error| StoreError(format!("запись {}: {error}", temporary.display())))?;
+            file.write_all(&contents)
+                .and_then(|()| file.sync_all())
+                .map_err(|error| StoreError(format!("запись {}: {error}", temporary.display())))?;
+        }
+        if let Err(first) = fs::rename(&temporary, &self.path) {
+            // Windows не заменяет существующий файл атомарно.
+            fs::remove_file(&self.path)
+                .map_err(|error| StoreError(format!("замена {}: {error}", self.path.display())))?;
+            fs::rename(&temporary, &self.path).map_err(|_| {
+                StoreError(format!(
+                    "замена {}: {first}; {}",
+                    self.path.display(),
+                    "повторная попытка не удалась"
+                ))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredDocument {
+    #[serde(default)]
+    assignments: Vec<AssignmentRecord>,
+    #[serde(default)]
+    hotkeys: Vec<AssignmentRecord>,
+    #[serde(default)]
+    shortcut: Option<String>,
+    #[serde(default)]
+    hotkey: Option<String>,
+    #[serde(default)]
+    combo: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyBinding {
+    #[serde(default)]
+    module_id: Option<String>,
+    #[serde(default)]
+    module_name: Option<String>,
+    #[serde(default)]
+    action_id: Option<String>,
+    #[serde(default)]
+    action_name: Option<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+impl Default for LegacyBinding {
+    fn default() -> Self {
+        Self {
+            module_id: None,
+            module_name: None,
+            action_id: None,
+            action_name: None,
+            enabled: true,
+        }
+    }
+}
+
+fn legacy_record(combo: String) -> AssignmentRecord {
+    legacy_record_with(combo, LegacyBinding::default())
+}
+
+fn legacy_record_with(combo: String, binding: LegacyBinding) -> AssignmentRecord {
+    AssignmentRecord {
+        combo,
+        module_id: binding
+            .module_id
+            .unwrap_or_else(|| "org.utilmaker.control".to_owned()),
+        module_name: binding
+            .module_name
+            .unwrap_or_else(|| "Контрольный модуль".to_owned()),
+        action_id: binding.action_id.unwrap_or_else(|| "ping".to_owned()),
+        action_name: binding
+            .action_name
+            .unwrap_or_else(|| "Проверить связь".to_owned()),
+        enabled: binding.enabled,
+        available: true,
+        registration_error: None,
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
 fn record_for(candidate: &Candidate, combo: String) -> AssignmentRecord {
     AssignmentRecord {
         combo,
@@ -666,6 +978,8 @@ fn record_for(candidate: &Candidate, combo: String) -> AssignmentRecord {
         action_id: candidate.action_id.clone(),
         action_name: candidate.action_name.clone(),
         enabled: candidate.enabled,
+        available: true,
+        registration_error: None,
     }
 }
 

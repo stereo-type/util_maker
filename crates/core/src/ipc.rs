@@ -21,6 +21,7 @@ use util_maker_sdk::{
     SHUTDOWN_TIMEOUT,
 };
 
+use crate::diagnostics::sanitize;
 use crate::error::CoreError;
 
 /// Приёмник диагностических строк модуля (stderr и служебные сообщения).
@@ -111,7 +112,9 @@ impl ModuleProcess {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
                 if !line.trim().is_empty() {
-                    stderr_logger(&format!("[module] {line}"));
+                    // Необработанный stderr не попадает в журнал как есть:
+                    // заголовки авторизации и URL с параметрами скрываются.
+                    stderr_logger(&format!("[module] {}", sanitize(&line)));
                 }
             }
         });

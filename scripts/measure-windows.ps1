@@ -14,7 +14,9 @@ param(
     [int]$IntervalSeconds = 1,
     [switch]$InvokeBenchmark,
     # Путь виден в настройках приложения: <папка установки>\logs\util-maker.log.
-    [string]$LogPath = "$env:LOCALAPPDATA\Util Maker\logs\util-maker.log"
+    [string]$LogPath = "$env:LOCALAPPDATA\Util Maker\logs\util-maker.log",
+    # Структурированный журнал с firstFrameMs, moduleId, actionId и cold.
+    [string]$MetricsPath = "$env:LOCALAPPDATA\Util Maker\logs\util-maker.jsonl"
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,17 +77,44 @@ function Get-TotalCpuSeconds {
 }
 
 if ($InvokeBenchmark) {
+    $records = @()
+    if (Test-Path $MetricsPath) {
+        foreach ($line in Get-Content -Path $MetricsPath) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $record = $line | ConvertFrom-Json } catch { continue }
+            if ($null -ne $record.firstFrameMs -and $record.moduleId -and $record.actionId) {
+                $records += $record
+            }
+        }
+    }
+    if ($records.Count -gt 0) {
+        "Записей с первым кадром: {0}. Всего записей: {1}." -f `
+            $records.Count, (Get-Content -Path $MetricsPath | Measure-Object).Count
+        $groups = $records | Group-Object {
+            "{0}/{1} cold={2}" -f $_.moduleId, $_.actionId, [bool]$_.cold
+        }
+        foreach ($group in $groups) {
+            $sorted = @($group.Group | ForEach-Object { [int]$_.firstFrameMs } | Sort-Object)
+            $p95Index = [Math]::Min($sorted.Count - 1, [Math]::Ceiling($sorted.Count * 0.95) - 1)
+            "{0}: выборка {1}, медиана {2} мс, p95 {3} мс, максимум {4} мс" -f `
+                $group.Name, $sorted.Count, $sorted[[Math]::Floor($sorted.Count / 2)], `
+                $sorted[$p95Index], $sorted[-1]
+        }
+        "Облачный запрос измеряется отдельно: firstFrameMs не заменяется durationMs."
+        exit 0
+    }
+
     if (-not (Test-Path $LogPath)) {
-        throw "Журнал не найден: $LogPath. Сначала вызовите действие сочетанием 50 раз."
+        throw "Не найден структурированный журнал $MetricsPath или старый $LogPath. Сначала вызовите действие сочетанием 50 раз."
     }
     $values = Select-String -Path $LogPath -Pattern "since_event_ms=(\d+)" |
         ForEach-Object { [int]$_.Matches[0].Groups[1].Value }
     if ($values.Count -eq 0) {
-        throw "В журнале нет строк since_event_ms. Проверьте, что действие вызывалось сочетанием или из трея."
+        throw "В журнале нет firstFrameMs или since_event_ms. Проверьте, что действие вызывалось сочетанием или из трея."
     }
     $sorted = $values | Sort-Object
     $p95Index = [Math]::Min($sorted.Count - 1, [Math]::Ceiling($sorted.Count * 0.95) - 1)
-    "Вызовов: {0}" -f $values.Count
+    "Старый текстовый журнал: вызовов {0}" -f $values.Count
     "Минимум, мс: {0}" -f $sorted[0]
     "Медиана, мс: {0}" -f $sorted[[Math]::Floor($sorted.Count / 2)]
     "p95, мс: {0}" -f $sorted[$p95Index]

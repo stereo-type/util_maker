@@ -33,7 +33,7 @@ NSIS, затем кросс-собирает `util-maker-desktop.exe` и `contro
 `x86_64-pc-windows-msvc` и упаковывает установщик. Первый запуск скачивает
 зависимости Cargo и CRT/SDK Microsoft, поэтому занимает больше времени.
 
-Результат: `dist/UtilMaker-Setup-<версия>-<тип>.exe`, например `UtilMaker-Setup-0.4.0-dev.exe`. Цель печатает полный путь,
+Результат: `dist/UtilMaker-Setup-<версия>-<тип>.exe`, например `UtilMaker-Setup-0.4.1-dev.exe`. Цель печатает полный путь,
 размер и SHA-256. Каталоги сборки и кеши лежат в `.cache/windows-build/`, в
 репозиторий не попадают.
 

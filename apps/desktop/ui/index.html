@@ -365,7 +365,6 @@
             `${result.message}\nЯдро: ${result.coreElapsedMs} мс, от нажатия до результата: ${result.sinceEventMs} мс.`,
             result.status === "ok" ? "ok" : "error"
           );
-          await loadPlugins();
         } catch (error) {
           showResult(`Ошибка: ${error}`, "error");
         }

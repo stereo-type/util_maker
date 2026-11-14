@@ -90,6 +90,43 @@ impl PackageStore {
         self.write_state()
     }
 
+    /// Переключает активную версию на уже установленную рядом.
+    pub fn activate(&mut self, id: &str, version: &str) -> Result<InstalledModule, PackageError> {
+        let target = self.root.join("modules").join(id).join(version);
+        let manifest_path = target.join(MANIFEST_ENTRY);
+        let bytes = fs::read(&manifest_path).map_err(PackageError::Io)?;
+        let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|error| {
+            PackageError::Install(format!("манифест {}: {error}", manifest_path.display()))
+        })?;
+        let entrypoint = target.join(
+            manifest
+                .resolved_entrypoint("linux-x64")
+                .or_else(|_| manifest.resolved_entrypoint("windows-x64"))
+                .map_err(|error| PackageError::UnsupportedPlatform(error.to_string()))?,
+        );
+        let next = InstalledModule {
+            id: manifest.id.clone(),
+            name: manifest.name.clone(),
+            publisher: manifest.publisher.clone(),
+            version: manifest.version.clone(),
+            entrypoint,
+            manifest_path,
+        };
+        let old = self.state.modules.insert(id.to_owned(), next.clone());
+        let previous_settings = self.state.previous_settings.clone();
+        if let Some(old) = old.clone().filter(|old| old.version != version) {
+            self.state.previous.insert(id.to_owned(), old);
+        }
+        if let Err(error) = self.write_state() {
+            self.state.previous_settings = previous_settings;
+            if let Some(old) = old {
+                self.state.modules.insert(id.to_owned(), old);
+            }
+            return Err(error);
+        }
+        Ok(next)
+    }
+
     /// Возвращает предыдущую версию и её метаданные.
     pub fn rollback(&mut self, id: &str) -> Result<InstalledModule, PackageError> {
         let previous =
@@ -378,6 +415,30 @@ mod tests {
         assert_eq!(
             reopened.module("com.example.rollback").unwrap().version,
             "0.1.0"
+        );
+    }
+
+    #[test]
+    fn activates_already_installed_version() {
+        let (v1, trust, root) = package("com.example.activate", "com.example", "0.1.0", 8);
+        let (v2, _, _) = package("com.example.activate", "com.example", "0.2.0", 8);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&v1, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .install(&v2, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        let active = store.activate("com.example.activate", "0.1.0").unwrap();
+        assert_eq!(active.version, "0.1.0");
+        assert_eq!(
+            store.module("com.example.activate").unwrap().version,
+            "0.1.0"
+        );
+        assert_eq!(
+            store.previous("com.example.activate").unwrap().version,
+            "0.2.0"
         );
     }
 

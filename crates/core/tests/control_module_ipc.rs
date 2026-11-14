@@ -3,6 +3,7 @@
 
 mod support;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -124,4 +125,58 @@ fn registry_routes_action_from_manifest_without_starting_module() {
 #[test]
 fn host_api_version_is_advertised() {
     assert_eq!(HOST_API_VERSION, "1.0.0");
+}
+
+#[test]
+fn control_action_can_be_invoked_repeatedly() {
+    let manifest = Manifest::load(&manifest_path()).expect("манифест");
+    let executable = module_binary();
+    assert!(
+        executable.is_file(),
+        "не найден процесс контрольного модуля {}",
+        executable.display()
+    );
+
+    let mut registry = Registry::new();
+    registry
+        .add(manifest, executable)
+        .expect("регистрация контрольного модуля");
+
+    let mut call_ids = BTreeSet::new();
+    let mut previous_pid = None;
+    for attempt in 1..=3 {
+        let outcome = registry
+            .invoke(
+                &ActionRef::new(MODULE_ID, "ping"),
+                InvocationSource::Tray,
+                Duration::from_secs(5),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("вызов {attempt}: {error}"));
+        assert_eq!(outcome.status, InvokeStatus::Ok);
+        assert!(
+            call_ids.insert(outcome.call_id.clone()),
+            "идентификатор вызова {} повторился",
+            outcome.call_id
+        );
+
+        let data = outcome.data.expect("данные результата");
+        assert_eq!(data["callId"], outcome.call_id);
+        assert_eq!(data["source"], "tray");
+        let pid =
+            u32::try_from(data["pid"].as_u64().expect("PID процесса")).expect("PID в пределах u32");
+        if let Some(previous) = previous_pid {
+            assert_ne!(
+                previous, pid,
+                "повторный вызов должен запускать новый процесс"
+            );
+        }
+        previous_pid = Some(pid);
+
+        #[cfg(target_os = "linux")]
+        assert!(
+            !PathBuf::from(format!("/proc/{pid}")).exists(),
+            "процесс {pid} остался после завершения вызова"
+        );
+    }
 }

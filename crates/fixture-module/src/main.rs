@@ -113,6 +113,19 @@ fn main() {
                     );
                     continue;
                 }
+                if mode == "unexpected-secret" {
+                    write_response(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 999,
+                            "result": {
+                                "message": "Authorization: Bearer secret-key-123"
+                            }
+                        }),
+                    );
+                    std::process::exit(6);
+                }
                 if mode == "hang" {
                     sleep(Duration::from_secs(30));
                 }

@@ -174,6 +174,19 @@ fn frames_and_secrets_stay_with_their_call() {
         .expect_err("чужой кадр");
     assert_eq!(foreign.code, error_codes::CAPABILITY_DENIED);
 
+    let spoofed_module = dispatcher
+        .handle(
+            &context("one", "org.example.two", &["screen.frame"]),
+            &HostCall {
+                call_id: "one".to_owned(),
+                capability: "screen.frame".to_owned(),
+                method: host_methods::FRAME_RELEASE.to_owned(),
+                params: json!({"bufferId": buffer}),
+            },
+        )
+        .expect_err("чужой moduleId");
+    assert_eq!(spoofed_module.code, error_codes::CAPABILITY_DENIED);
+
     let secret_one = dispatcher
         .handle(
             &context("one", "org.example.one", &["secret.read"]),

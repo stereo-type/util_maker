@@ -257,12 +257,6 @@ impl Registry {
         } else {
             disabled.insert(module_id.to_owned())
         };
-        if !enabled {
-            let active = self.active.lock().expect("активные вызовы");
-            for call in active.values().filter(|call| call.module_id == module_id) {
-                call.cancel.store(true, Ordering::SeqCst);
-            }
-        }
         if let Err(error) = self.persist_disabled(&disabled) {
             if changed {
                 if enabled {
@@ -275,6 +269,12 @@ impl Registry {
                 entry.enabled = !enabled;
             }
             return Err(error);
+        }
+        if !enabled {
+            let active = self.active.lock().expect("активные вызовы");
+            for call in active.values().filter(|call| call.module_id == module_id) {
+                call.cancel.store(true, Ordering::SeqCst);
+            }
         }
         Ok(true)
     }

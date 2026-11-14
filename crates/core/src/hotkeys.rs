@@ -318,9 +318,18 @@ impl Candidate {
 pub enum CheckResult {
     Available,
     SameAssignment,
-    InternalConflict { previous: Owner, proposed: Box<Owner> },
-    SystemReserved { combo: String, function: String },
-    RegistrationRejected { combo: String, occupied: bool },
+    InternalConflict {
+        previous: Owner,
+        proposed: Box<Owner>,
+    },
+    SystemReserved {
+        combo: String,
+        function: String,
+    },
+    RegistrationRejected {
+        combo: String,
+        occupied: bool,
+    },
 }
 
 /// Подтверждение переноса, показанное пользователю на предыдущем шаге.

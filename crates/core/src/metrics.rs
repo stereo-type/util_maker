@@ -106,15 +106,13 @@ pub fn summarize<'a>(entries: impl IntoIterator<Item = &'a LogEntry>) -> Metrics
         frame_samples,
         actions: groups
             .into_iter()
-            .map(
-                |((module_id, action_id), values)| ActionMetrics {
-                    module_id,
-                    action_id,
-                    all: Percentiles::from_values(values.all),
-                    cold: Percentiles::from_values(values.cold),
-                    warm: Percentiles::from_values(values.warm),
-                },
-            )
+            .map(|((module_id, action_id), values)| ActionMetrics {
+                module_id,
+                action_id,
+                all: Percentiles::from_values(values.all),
+                cold: Percentiles::from_values(values.cold),
+                warm: Percentiles::from_values(values.warm),
+            })
             .collect(),
     }
 }

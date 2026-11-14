@@ -15,6 +15,7 @@ const FIXTURE_ID: &str = "org.utilmaker.fixture";
 const CRASH_ID: &str = "org.example.crash";
 const RPC_ERROR_ID: &str = "org.example.rpc-error";
 const STDERR_ID: &str = "org.example.stderr";
+const UNEXPECTED_ID: &str = "org.example.unexpected";
 
 fn manifest_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/control/manifest.json")
@@ -60,6 +61,7 @@ fn registry() -> Registry {
             fixture(CRASH_ID, "crash"),
             fixture(RPC_ERROR_ID, "rpc-error"),
             fixture(STDERR_ID, "stderr-secret-init"),
+            fixture(UNEXPECTED_ID, "unexpected-secret"),
         ])
         .expect("каталог");
     registry
@@ -168,4 +170,26 @@ fn one_crashing_plugin_does_not_block_another() {
     assert_eq!(failure.category, FailureCategory::ModuleCrashed);
     assert_eq!(failure.module_id, CRASH_ID);
     assert!(registry.can_switch(CONTROL_ID));
+}
+
+#[test]
+fn unexpected_ipc_message_is_sanitized_in_journal() {
+    let registry = registry();
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = lines.clone();
+    let logger: util_maker_core::Logger =
+        Arc::new(move |line: &str| sink.lock().expect("журнал").push(line.to_owned()));
+    let failure = registry
+        .invoke_detailed(
+            &ActionRef::new(UNEXPECTED_ID, "run"),
+            InvocationSource::Tray,
+            Duration::from_secs(5),
+            Some(logger),
+        )
+        .expect_err("падение после чужого ответа");
+    assert_eq!(failure.category, FailureCategory::ModuleCrashed);
+    let journal = lines.lock().expect("журнал").join("\n");
+    assert!(journal.contains("пропущено сообщение"));
+    assert!(journal.contains("скрыто"));
+    assert!(!journal.contains("secret-key-123"));
 }

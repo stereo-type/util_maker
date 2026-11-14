@@ -405,9 +405,11 @@ impl ModuleProcess {
                         continue;
                     }
                     if !has_id(&value, expected_id) {
+                        // Чужое/запоздалое сообщение не должно протащить в
+                        // журнал заголовки авторизации или параметры URL.
+                        let preview = sanitize(&truncate(&line));
                         (self.logger)(&format!(
-                            "[ipc] пропущено сообщение без ожидаемого id {expected_id}: {}",
-                            truncate(&line)
+                            "[ipc] пропущено сообщение без ожидаемого id {expected_id}: {preview}"
                         ));
                         continue;
                     }

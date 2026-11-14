@@ -15,6 +15,7 @@ fi
 target_dir="${CARGO_TARGET_DIR:-/workspace/.cache/windows-build/target}"
 export CARGO_TARGET_DIR="$target_dir"
 
+
 echo "Util Maker $version: сборка x86_64-pc-windows-msvc"
 cargo xwin build --release --target x86_64-pc-windows-msvc \
     -p util-maker-desktop -p util-maker-control-module \

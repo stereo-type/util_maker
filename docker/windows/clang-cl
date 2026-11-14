@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Обёртка clang-cl для кросс-сборки из Linux.
+#
+# cargo-xwin передаёт абсолютные Unix-пути, а clang-cl в режиме CL принимает
+# аргумент, начинающийся с `/`, за опцию (`/workspace/...` → неизвестный флаг).
+# Перед первым абсолютным путём ставим `--`, после чего clang-cl разбирает его
+# как файл. Выходные опции `/Fo`, `/Fe`, `/Fd` не трогаем.
+set -euo pipefail
+
+result=()
+inserted=0
+for arg in "$@"; do
+    if [[ $inserted -eq 0 && "$arg" == /*/* &&
+          "$arg" != /Fo* && "$arg" != /Fe* && "$arg" != /Fd* ]]; then
+        result+=("--")
+        inserted=1
+    fi
+    result+=("$arg")
+done
+
+exec /usr/bin/clang --driver-mode=cl "${result[@]}"

@@ -13,6 +13,7 @@ RUN rustup target add x86_64-pc-windows-msvc \
     && cargo install cargo-xwin --locked
 
 COPY build-windows.sh /usr/local/bin/util-maker-build-windows
-RUN chmod 0755 /usr/local/bin/util-maker-build-windows
+COPY clang-cl /usr/local/bin/clang-cl
+RUN chmod 0755 /usr/local/bin/util-maker-build-windows /usr/local/bin/clang-cl
 
 WORKDIR /workspace

@@ -15,7 +15,7 @@ Unicode true
 !include "MUI2.nsh"
 
 !ifndef VERSION
-    !define VERSION "0.2.0"
+    !define VERSION "0.3.0"
 !endif
 !ifndef APP_EXE
     !error "Не задан APP_EXE"

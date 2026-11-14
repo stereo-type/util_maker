@@ -11,7 +11,7 @@ mod logging;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use tauri::{
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use util_maker_core::{ActionRef, InvokeOutcome, Registry};
-use util_maker_platform::{HotkeyService, RegisterFailure};
+use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
 use util_maker_sdk::{protocol::InvocationSource, Manifest};
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
@@ -48,15 +48,19 @@ struct ShortcutRuntime {
 }
 
 impl ShortcutRuntime {
-    fn start() -> Result<Self, String> {
-        let service = HotkeyService::start()?;
+    fn start() -> Result<(Self, Receiver<HotkeyEvent>), String> {
+        let mut service = HotkeyService::start()?;
+        let events = service.take_events();
         let (registered, status) = register_shortcut(&service);
-        Ok(Self {
-            service: Mutex::new(service),
-            paused: AtomicBool::new(false),
-            registered: AtomicBool::new(registered),
-            status: Mutex::new(status),
-        })
+        Ok((
+            Self {
+                service: Mutex::new(service),
+                paused: AtomicBool::new(false),
+                registered: AtomicBool::new(registered),
+                status: Mutex::new(status),
+            },
+            events,
+        ))
     }
 }
 
@@ -92,6 +96,7 @@ struct StatusPayload {
     action_name: String,
     shortcut: String,
     shortcut_status: String,
+    build_kind: String,
     module_path: String,
     log_path: String,
     config_path: String,
@@ -100,6 +105,7 @@ struct StatusPayload {
 fn main() {
     logging::init();
     logging::write("запуск Util Maker (прототип)");
+    logging::debug("инициализация приложения");
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             logging::write("повторный запуск: показываю настройки существующего экземпляра");
@@ -113,15 +119,17 @@ fn main() {
             open_settings_command,
             close_settings,
             close_result,
+            get_autostart,
+            set_autostart,
             quit_app
         ])
         .setup(|app| {
             setup_tray(app)?;
-            let runtime = ShortcutRuntime::start()?;
+            let (runtime, events) = ShortcutRuntime::start()?;
             let status = runtime.status.lock().expect("статус сочетания").clone();
             app.manage(runtime);
             set_shortcut_status(app.handle(), &status);
-            spawn_hotkey_listener(app.handle().clone());
+            spawn_hotkey_listener(app.handle().clone(), events);
             let first_run = mark_and_check_first_run(app.handle())?;
             if first_run {
                 logging::write("первый запуск: открываю настройки");
@@ -304,17 +312,17 @@ fn invoke_and_show(app: &AppHandle, source: InvocationSource) {
 }
 
 /// Слушает WM_HOTKEY из платформенного адаптера и вызывает действие.
-fn spawn_hotkey_listener(app: AppHandle) {
+fn spawn_hotkey_listener(app: AppHandle, events: Receiver<HotkeyEvent>) {
     std::thread::spawn(move || loop {
-        let event = {
-            let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
-                break;
-            };
-            let service = runtime.service.lock().expect("служба сочетаний");
-            service.recv_timeout(Duration::from_millis(250))
-        };
-        match event {
+        match events.recv_timeout(Duration::from_millis(250)) {
             Ok(event) if event.pressed => {
+                logging::debug(&format!("WM_HOTKEY id={}", event.id));
+                let paused = app
+                    .try_state::<ShortcutRuntime>()
+                    .is_some_and(|runtime| runtime.paused.load(Ordering::SeqCst));
+                if paused {
+                    continue;
+                }
                 let handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     invoke_and_show(&handle, InvocationSource::Hotkey);
@@ -334,12 +342,12 @@ fn set_shortcut_status(app: &AppHandle, status: &str) {
         }
     }
     logging::write(&format!("сочетание: {status}"));
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(format!("Util Maker — {status}")));
-    }
+    // Подсказку трея не обновляем из обработчика меню: на Windows это может
+    // конфликтовать с открытым контекстным меню. Состояние видно в настройках.
 }
 
 fn toggle_shortcut_pause(app: &AppHandle) {
+    logging::debug("меню: переключение паузы сочетания");
     let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
         return;
     };
@@ -354,18 +362,21 @@ fn toggle_shortcut_pause(app: &AppHandle) {
         }
         set_shortcut_status(app, &status);
     } else {
+        // Сначала закрываем обработку событий, затем освобождаем регистрацию:
+        // иначе уже поставленное в очередь WM_HOTKEY успеет вызвать действие.
+        runtime.paused.store(true, Ordering::SeqCst);
         runtime
             .service
             .lock()
             .expect("служба сочетаний")
             .unregister(HOTKEY_ID);
         runtime.registered.store(false, Ordering::SeqCst);
-        runtime.paused.store(true, Ordering::SeqCst);
         set_shortcut_status(app, "на паузе");
     }
 }
 
 fn retry_shortcut(app: &AppHandle) {
+    logging::debug("меню: повторная регистрация сочетания");
     let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
         return;
     };
@@ -385,6 +396,7 @@ fn retry_shortcut(app: &AppHandle) {
 }
 
 fn run_control_action(app: &AppHandle, source: InvocationSource) -> Result<InvokeOutcome, String> {
+    logging::debug(&format!("вызов действия source={}", source.as_str()));
     let directory = module_directory(app)?;
     let manifest_path = directory.join("manifest.json");
     let manifest = Manifest::load(&manifest_path)
@@ -466,6 +478,7 @@ fn get_status(app: AppHandle) -> Result<StatusPayload, String> {
             .try_state::<ShortcutRuntime>()
             .and_then(|runtime| runtime.status.lock().ok().map(|status| status.clone()))
             .unwrap_or_else(|| "неизвестно".to_owned()),
+        build_kind: logging::build_kind().to_owned(),
         module_path: directory.display().to_string(),
         log_path: logging::log_path(),
         config_path,
@@ -497,6 +510,29 @@ async fn invoke_control(app: AppHandle, source: Option<String>) -> Result<LastRe
         }
     }
     Ok(last)
+}
+
+#[tauri::command]
+fn get_autostart() -> Result<bool, String> {
+    let executable =
+        std::env::current_exe().map_err(|error| format!("путь приложения: {error}"))?;
+    util_maker_platform::autostart::is_enabled(&executable)
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    let executable =
+        std::env::current_exe().map_err(|error| format!("путь приложения: {error}"))?;
+    util_maker_platform::autostart::set_enabled(enabled, &executable)?;
+    logging::write(&format!(
+        "автозапуск при входе в Windows: {}",
+        if enabled {
+            "включён"
+        } else {
+            "выключен"
+        }
+    ));
+    Ok(())
 }
 
 #[tauri::command]

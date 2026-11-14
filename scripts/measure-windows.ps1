@@ -13,6 +13,7 @@ param(
     [int]$Seconds = 60,
     [int]$IntervalSeconds = 1,
     [switch]$InvokeBenchmark,
+    # Путь виден в настройках приложения: <папка установки>\logs\util-maker.log.
     [string]$LogPath = "$env:LOCALAPPDATA\Util Maker\logs\util-maker.log"
 )
 

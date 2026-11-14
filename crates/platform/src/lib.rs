@@ -5,10 +5,12 @@
 //! На других ОС адаптер сообщает, что операция недоступна, — это позволяет
 //! собирать и тестировать переносимое ядро на Linux.
 
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use util_maker_core::hotkeys::{system_function, Hotkey};
+
+pub mod autostart;
 
 /// Отказ регистрации, различимый интерфейсом.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +68,11 @@ impl HotkeyService {
     /// Ждёт событие сочетания не дольше указанного времени.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<HotkeyEvent, RecvTimeoutError> {
         self.inner.recv_timeout(timeout)
+    }
+
+    /// Забирает приёмник событий, чтобы слушатель не удерживал службу.
+    pub fn take_events(&mut self) -> Receiver<HotkeyEvent> {
+        self.inner.take_events()
     }
 }
 

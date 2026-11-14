@@ -84,6 +84,9 @@
       .result.ok { color: var(--ok); }
       footer { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
       kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font-family: inherit; font-size: 12px; }
+      .check { display: flex; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
+      .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+      .hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
     </style>
   </head>
   <body>
@@ -118,6 +121,15 @@
         <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
       </section>
 
+      <section class="card" aria-labelledby="startup-title">
+        <h2 class="module-name" id="startup-title" style="margin-bottom: 12px">Запуск</h2>
+        <label class="check">
+          <input type="checkbox" id="autostart" disabled />
+          Автозапуск при входе в Windows
+        </label>
+        <p class="hint" id="autostart-status">Проверка настройки…</p>
+      </section>
+
       <section class="card">
         <dl style="margin-top: 0">
           <dt>Журнал</dt>
@@ -130,6 +142,7 @@
       <footer>
         Закрытие настроек оставляет приложение в трее. Повторный запуск открывает настройки
         существующего экземпляра. Сочетание работает в любой программе.
+        <span id="build-kind"></span>
       </footer>
     </main>
 
@@ -144,6 +157,9 @@
         log: document.getElementById("log-path"),
         config: document.getElementById("config-path"),
         shortcut: document.getElementById("shortcut-status"),
+        autostart: document.getElementById("autostart"),
+        autostartStatus: document.getElementById("autostart-status"),
+        build: document.getElementById("build-kind"),
         result: document.getElementById("result"),
         run: document.getElementById("run"),
         close: document.getElementById("close"),
@@ -162,6 +178,7 @@
           elements.version.textContent = `${status.moduleVersion} (${status.moduleId})`;
           elements.action.textContent = status.actionName;
           elements.shortcut.textContent = status.shortcutStatus;
+          elements.build.textContent = ` Сборка: ${status.buildKind}.`;
           elements.path.textContent = status.modulePath;
           elements.log.textContent = status.logPath || "недоступен";
           elements.config.textContent = status.configPath || "недоступен";
@@ -194,10 +211,38 @@
         }
       });
 
+      async function loadAutostart() {
+        try {
+          elements.autostart.checked = await invoke("get_autostart");
+          elements.autostart.disabled = false;
+          elements.autostartStatus.textContent = "Текущее состояние загружено.";
+        } catch (error) {
+          elements.autostart.disabled = true;
+          elements.autostartStatus.textContent = `Недоступно: ${error}`;
+        }
+      }
+
+      elements.autostart.addEventListener("change", async () => {
+        const enabled = elements.autostart.checked;
+        elements.autostart.disabled = true;
+        try {
+          await invoke("set_autostart", { enabled });
+          elements.autostartStatus.textContent = enabled
+            ? "Util Maker будет запускаться при входе в Windows."
+            : "Автозапуск выключен.";
+        } catch (error) {
+          elements.autostart.checked = !enabled;
+          elements.autostartStatus.textContent = `Не удалось изменить автозапуск: ${error}`;
+        } finally {
+          elements.autostart.disabled = false;
+        }
+      });
+
       elements.close.addEventListener("click", () => invoke("close_settings"));
       elements.quit.addEventListener("click", () => invoke("quit_app"));
       window.addEventListener("DOMContentLoaded", loadStatus);
       loadStatus();
+      loadAutostart();
     </script>
   </body>
 </html>

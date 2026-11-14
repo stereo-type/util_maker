@@ -61,6 +61,30 @@ ShowUninstDetails show
 
 Section "Util Maker" SEC_MAIN
     SectionIn RO
+
+    ; Предыдущая версия может работать и держать exe. Закрываем её без
+    ; ручного удаления, затем при необходимости запускаем старый деинсталлятор.
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM util-maker-desktop.exe'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM control-module.exe'
+    Pop $0
+    Pop $1
+    Sleep 400
+
+    ; Если автозапуск был включён, восстановим его для нового пути.
+    ReadRegStr $2 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "UtilMaker"
+
+    ReadRegStr $0 HKCU "Software\Util Maker" "InstallDir"
+    StrCmp $0 "" previous_removed
+    StrCmp $0 "$INSTDIR" previous_removed
+    IfFileExists "$0\uninstall.exe" 0 previous_removed
+    ExecWait '"$0\uninstall.exe" /S _?=$0' $1
+    Sleep 400
+    Delete "$0\uninstall.exe"
+    RMDir "$0"
+previous_removed:
+
     SetOutPath "$INSTDIR"
     File "${APP_EXE}"
     File "/oname=README.txt" "${README_FILE}"
@@ -87,6 +111,10 @@ Section "Util Maker" SEC_MAIN
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" 12000
+
+    StrCmp $2 "" autostart_done
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "UtilMaker" "$\"$INSTDIR\util-maker-desktop.exe$\""
+autostart_done:
 SectionEnd
 
 Section "Uninstall"
@@ -104,6 +132,7 @@ Section "Uninstall"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
 
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "UtilMaker"
     DeleteRegKey HKCU "${UNINSTALL_KEY}"
     DeleteRegKey HKCU "Software\Util Maker"
     ; Пользовательские настройки и журнал остаются до ручного удаления:

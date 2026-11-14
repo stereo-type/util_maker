@@ -51,7 +51,7 @@ fn contexts() -> &'static Mutex<BTreeMap<isize, Arc<WindowContext>>> {
 pub struct Service {
     handle: isize,
     commands: Arc<Mutex<VecDeque<Command>>>,
-    events: Receiver<HotkeyEvent>,
+    events: Option<Receiver<HotkeyEvent>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -68,7 +68,7 @@ impl Service {
             Ok(handle) if handle != 0 => Ok(Self {
                 handle,
                 commands,
-                events,
+                events: Some(events),
                 thread: Some(thread),
             }),
             Ok(_) => Err("не удалось создать окно сообщений Windows".to_owned()),
@@ -104,7 +104,14 @@ impl Service {
     }
 
     pub fn recv_timeout(&self, timeout: Duration) -> Result<HotkeyEvent, RecvTimeoutError> {
-        self.events.recv_timeout(timeout)
+        self.events
+            .as_ref()
+            .expect("события уже забраны")
+            .recv_timeout(timeout)
+    }
+
+    pub fn take_events(&mut self) -> Receiver<HotkeyEvent> {
+        self.events.take().expect("события уже забраны")
     }
 
     fn post(&self) {

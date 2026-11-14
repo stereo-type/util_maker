@@ -1,8 +1,9 @@
-//! Журнал прототипа: `%LOCALAPPDATA%\Util Maker\logs\util-maker.log`.
+//! Журнал прототипа: `<каталог установки>\logs\util-maker.log`.
 //!
-//! Формат строки — ISO-время UTC, уровень и сообщение. Исходный текст,
-//! переводы, снимки и ключи в журнал не попадают: модуль возвращает только
-//! служебные сведения.
+//! Основной путь — рядом с исполняемым файлом; если каталог установки недоступен
+//! для записи, используется `%LOCALAPPDATA%\Util Maker\logs`. Формат строки —
+//! ISO-время UTC, тип сборки и сообщение. Исходный текст, переводы, снимки и
+//! ключи в журнал не попадают.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -14,11 +15,42 @@ use util_maker_core::Logger;
 
 const MAX_LOG_BYTES: u64 = 1024 * 1024;
 
+/// Тип сборки, заданный через `UTIL_MAKER_BUILD` при сборке.
+pub const BUILD_KIND: &str = env!("UTIL_MAKER_BUILD");
+
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
-/// Выбирает каталог журнала текущего пользователя.
+/// Выбирает каталог журнала: рядом с приложением, иначе в данных пользователя.
 pub fn init() {
+    let directory = log_directory();
+    if fs::create_dir_all(&directory).is_err() {
+        eprintln!("не удалось создать каталог журнала {}", directory.display());
+        return;
+    }
+    let path = directory.join("util-maker.log");
+    let _ = LOG_PATH.set(path.clone());
+    let executable = std::env::current_exe()
+        .map(|value| value.display().to_string())
+        .unwrap_or_else(|_| "неизвестно".to_owned());
+    write(&format!(
+        "старт build={BUILD_KIND} exe={executable} log={}",
+        path.display()
+    ));
+}
+
+fn log_directory() -> PathBuf {
+    if let Some(directory) = std::env::var_os("UTIL_MAKER_LOG_DIR") {
+        return PathBuf::from(directory);
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            let candidate = parent.join("logs");
+            if fs::create_dir_all(&candidate).is_ok() {
+                return candidate;
+            }
+        }
+    }
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .or_else(|| {
@@ -27,12 +59,18 @@ pub fn init() {
                 .map(|path| path.join("util-maker"))
         })
         .unwrap_or_else(|| PathBuf::from("."));
-    let directory = base.join("Util Maker").join("logs");
-    if fs::create_dir_all(&directory).is_err() {
-        eprintln!("не удалось создать каталог журнала {}", directory.display());
-        return;
+    base.join("Util Maker").join("logs")
+}
+
+pub fn build_kind() -> &'static str {
+    BUILD_KIND
+}
+
+/// Подробная запись для dev-сборки.
+pub fn debug(message: &str) {
+    if BUILD_KIND == "dev" {
+        write(&format!("DEBUG {message}"));
     }
-    let _ = LOG_PATH.set(directory.join("util-maker.log"));
 }
 
 pub fn log_path() -> String {

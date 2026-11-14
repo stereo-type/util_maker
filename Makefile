@@ -3,6 +3,7 @@ DEV_IMAGE ?= util-maker-dev:local
 DEV_HOME := /workspace/.cache/util-maker-dev
 WINDOWS_IMAGE ?= util-maker-windows:local
 WINDOWS_CACHE := .cache/windows-build
+BUILD_KIND ?= dev
 export CMD
 
 dev_container = docker run --rm --user "$$(id -u):$$(id -g)" \
@@ -14,7 +15,8 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env HOME=/workspace/$(WINDOWS_CACHE)/home \
 	--env CARGO_HOME=/workspace/$(WINDOWS_CACHE)/cargo \
 	--env CARGO_TARGET_DIR=/workspace/$(WINDOWS_CACHE)/target \
-	--env XWIN_CACHE_DIR=/workspace/$(WINDOWS_CACHE)/xwin
+	--env XWIN_CACHE_DIR=/workspace/$(WINDOWS_CACHE)/xwin \
+	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
 	icons windows-image build-windows
@@ -29,7 +31,7 @@ help:
 		'make test  — тесты workspace, включая IPC контрольного модуля' \
 		'make check  — fmt + lint + test' \
 		'make icons  — пересоздать иконки приложения' \
-		'make build-windows  — собрать NSIS-установщик в dist/ (Linux Docker)'
+		'make build-windows  — собрать NSIS-установщик в dist/ (Linux Docker, BUILD_KIND=dev)'
 
 dev-image:
 	docker build --tag "$(DEV_IMAGE)" docker/dev

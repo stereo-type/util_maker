@@ -8,13 +8,13 @@ use util_maker_core::hotkeys::Hotkey;
 use crate::{dormant_events, HotkeyEvent, RegisterFailure};
 
 pub struct Service {
-    events: Receiver<HotkeyEvent>,
+    events: Option<Receiver<HotkeyEvent>>,
 }
 
 impl Service {
     pub fn start() -> Result<Self, String> {
         Ok(Self {
-            events: dormant_events(),
+            events: Some(dormant_events()),
         })
     }
 
@@ -27,6 +27,13 @@ impl Service {
     pub fn unregister(&self, _id: u32) {}
 
     pub fn recv_timeout(&self, timeout: Duration) -> Result<HotkeyEvent, RecvTimeoutError> {
-        self.events.recv_timeout(timeout)
+        self.events
+            .as_ref()
+            .expect("события уже забраны")
+            .recv_timeout(timeout)
+    }
+
+    pub fn take_events(&mut self) -> Receiver<HotkeyEvent> {
+        self.events.take().expect("события уже забраны")
     }
 }

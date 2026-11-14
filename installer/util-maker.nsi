@@ -1,0 +1,111 @@
+; Установщик прототипа Util Maker для Windows 11 x64.
+;
+; Устанавливается для текущего пользователя без административных прав:
+;   %LOCALAPPDATA%\Util Maker
+; Файлы передаются из docker/windows/build-windows.sh через -D...
+;
+;   APP_EXE          — util-maker-desktop.exe
+;   MODULE_EXE       — control-module.exe
+;   MODULE_MANIFEST  — manifest.json контрольного модуля
+;   README_FILE      — краткая инструкция
+;   OUT_FILE         — путь к итоговому .exe
+;   VERSION          — версия продукта
+
+Unicode true
+!include "MUI2.nsh"
+
+!ifndef VERSION
+    !define VERSION "0.1.0"
+!endif
+!ifndef APP_EXE
+    !error "Не задан APP_EXE"
+!endif
+!ifndef MODULE_EXE
+    !error "Не задан MODULE_EXE"
+!endif
+!ifndef MODULE_MANIFEST
+    !error "Не задан MODULE_MANIFEST"
+!endif
+!ifndef README_FILE
+    !error "Не задан README_FILE"
+!endif
+!ifndef OUT_FILE
+    !error "Не задан OUT_FILE"
+!endif
+
+!define APP_NAME "Util Maker"
+!define APP_ID "UtilMakerPrototype"
+!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
+
+Name "${APP_NAME} ${VERSION} (прототип)"
+OutFile "${OUT_FILE}"
+InstallDir "$LOCALAPPDATA\Util Maker"
+InstallDirRegKey HKCU "Software\Util Maker" "InstallDir"
+RequestExecutionLevel user
+SetCompressor /SOLID lzma
+ShowInstDetails show
+ShowUninstDetails show
+
+!define MUI_ABORTWARNING
+!define MUI_FINISHPAGE_RUN "$INSTDIR\util-maker-desktop.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Запустить Util Maker"
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+!insertmacro MUI_LANGUAGE "Russian"
+
+Section "Util Maker" SEC_MAIN
+    SectionIn RO
+    SetOutPath "$INSTDIR"
+    File "${APP_EXE}"
+    File "/oname=README.txt" "${README_FILE}"
+
+    SetOutPath "$INSTDIR\modules\org.utilmaker.control"
+    File "${MODULE_EXE}"
+    File "${MODULE_MANIFEST}"
+
+    SetOutPath "$INSTDIR"
+    CreateShortCut "$DESKTOP\Util Maker.lnk" "$INSTDIR\util-maker-desktop.exe"
+    CreateDirectory "$SMPROGRAMS\Util Maker"
+    CreateShortCut "$SMPROGRAMS\Util Maker\Util Maker.lnk" "$INSTDIR\util-maker-desktop.exe"
+    CreateShortCut "$SMPROGRAMS\Util Maker\Удалить Util Maker.lnk" "$INSTDIR\uninstall.exe"
+
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+
+    WriteRegStr HKCU "Software\Util Maker" "InstallDir" "$INSTDIR"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME} (прототип)"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\util-maker-desktop.exe"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "Util Maker"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
+    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" 12000
+SectionEnd
+
+Section "Uninstall"
+    Delete "$DESKTOP\Util Maker.lnk"
+    Delete "$SMPROGRAMS\Util Maker\Util Maker.lnk"
+    Delete "$SMPROGRAMS\Util Maker\Удалить Util Maker.lnk"
+    RMDir "$SMPROGRAMS\Util Maker"
+
+    Delete "$INSTDIR\util-maker-desktop.exe"
+    Delete "$INSTDIR\README.txt"
+    Delete "$INSTDIR\modules\org.utilmaker.control\control-module.exe"
+    Delete "$INSTDIR\modules\org.utilmaker.control\manifest.json"
+    RMDir "$INSTDIR\modules\org.utilmaker.control"
+    RMDir "$INSTDIR\modules"
+    Delete "$INSTDIR\uninstall.exe"
+    RMDir "$INSTDIR"
+
+    DeleteRegKey HKCU "${UNINSTALL_KEY}"
+    DeleteRegKey HKCU "Software\Util Maker"
+    ; Пользовательские настройки и журнал остаются до ручного удаления:
+    ; %LOCALAPPDATA%\org.utilmaker.prototype и %LOCALAPPDATA%\Util Maker\logs.
+SectionEnd

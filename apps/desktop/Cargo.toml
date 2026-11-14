@@ -1,0 +1,20 @@
+[package]
+name = "util-maker-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Прототип нативного хоста Util Maker: трей, шорткей и окно настроек"
+default-run = "util-maker-desktop"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
+util-maker-core.workspace = true
+util-maker-sdk.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "util-maker-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Контракт микроприложения Util Maker: манифест и JSON-RPC v1"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+semver.workspace = true
+thiserror.workspace = true

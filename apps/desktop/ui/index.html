@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Util Maker — настройки</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f4f6fb;
+        --panel: #ffffff;
+        --text: #1c2333;
+        --muted: #5b6478;
+        --border: #d8deea;
+        --accent: #2f6fed;
+        --accent-text: #ffffff;
+        --ok: #157347;
+        --error: #b42318;
+        --focus: #7aa2ff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #10141e;
+          --panel: #1a2030;
+          --text: #e8ecf6;
+          --muted: #a3adc2;
+          --border: #2c3550;
+          --accent: #6b9bff;
+          --accent-text: #0b1020;
+          --ok: #5fd39a;
+          --error: #ff8a80;
+          --focus: #9db9ff;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main { max-width: 720px; margin: 0 auto; padding: 28px 20px 40px; }
+      header { margin-bottom: 20px; }
+      h1 { font-size: 22px; margin: 0 0 6px; }
+      header p { margin: 0; color: var(--muted); font-size: 14px; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 18px 20px;
+        margin-bottom: 16px;
+      }
+      .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+      .module-name { font-size: 17px; font-weight: 600; margin: 0; }
+      .badge {
+        display: inline-block;
+        padding: 2px 9px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .badge.ok { color: var(--ok); border-color: currentColor; }
+      .badge.error { color: var(--error); border-color: currentColor; }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 14px 0 0; font-size: 14px; }
+      dt { color: var(--muted); }
+      dd { margin: 0; overflow-wrap: anywhere; }
+      code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+      button {
+        font: inherit;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text);
+        padding: 9px 16px;
+        cursor: pointer;
+      }
+      button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+      button:disabled { opacity: 0.55; cursor: progress; }
+      button:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+      .result { margin-top: 16px; padding: 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); font-size: 14px; min-height: 22px; }
+      .result.error { color: var(--error); }
+      .result.ok { color: var(--ok); }
+      footer { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+      kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font-family: inherit; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Util Maker — прототип</h1>
+        <p>Трей и глобальное сочетание вызывают контрольный модуль отдельным процессом.</p>
+      </header>
+
+      <section class="card" aria-labelledby="module-title">
+        <div class="row">
+          <h2 class="module-name" id="module-title">Контрольный модуль</h2>
+          <span class="badge" id="module-state">Загрузка…</span>
+        </div>
+        <dl>
+          <dt>Версия</dt>
+          <dd id="module-version">—</dd>
+          <dt>Действие</dt>
+          <dd id="action-name">—</dd>
+          <dt>Сочетание</dt>
+          <dd><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>U</kbd></dd>
+          <dt>Каталог модуля</dt>
+          <dd><code id="module-path">—</code></dd>
+        </dl>
+        <div class="actions">
+          <button class="primary" id="run" type="button">Проверить связь</button>
+          <button id="close" type="button">Закрыть настройки</button>
+          <button id="quit" type="button">Выход</button>
+        </div>
+        <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
+      </section>
+
+      <section class="card">
+        <dl style="margin-top: 0">
+          <dt>Журнал</dt>
+          <dd><code id="log-path">—</code></dd>
+          <dt>Состояние</dt>
+          <dd><code id="config-path">—</code></dd>
+        </dl>
+      </section>
+
+      <footer>
+        Закрытие настроек оставляет приложение в трее. Повторный запуск открывает настройки
+        существующего экземпляра. Сочетание работает в любой программе.
+      </footer>
+    </main>
+
+    <script>
+      const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
+
+      const elements = {
+        state: document.getElementById("module-state"),
+        version: document.getElementById("module-version"),
+        action: document.getElementById("action-name"),
+        path: document.getElementById("module-path"),
+        log: document.getElementById("log-path"),
+        config: document.getElementById("config-path"),
+        result: document.getElementById("result"),
+        run: document.getElementById("run"),
+        close: document.getElementById("close"),
+        quit: document.getElementById("quit"),
+      };
+
+      function showResult(text, kind) {
+        elements.result.textContent = text;
+        elements.result.className = "result" + (kind ? " " + kind : "");
+      }
+
+      async function loadStatus() {
+        try {
+          const status = await invoke("get_status");
+          document.getElementById("module-title").textContent = status.moduleName;
+          elements.version.textContent = `${status.moduleVersion} (${status.moduleId})`;
+          elements.action.textContent = status.actionName;
+          elements.path.textContent = status.modulePath;
+          elements.log.textContent = status.logPath || "недоступен";
+          elements.config.textContent = status.configPath || "недоступен";
+          elements.state.textContent = "Готов к вызову";
+          elements.state.className = "badge ok";
+        } catch (error) {
+          elements.state.textContent = "Модуль недоступен";
+          elements.state.className = "badge error";
+          showResult(String(error), "error");
+        }
+      }
+
+      elements.run.addEventListener("click", async () => {
+        elements.run.disabled = true;
+        showResult("Выполняется вызов отдельного процесса…", "");
+        try {
+          const result = await invoke("invoke_control", { source: "settings" });
+          showResult(
+            `${result.message}\nЯдро: ${result.coreElapsedMs} мс, от нажатия до результата: ${result.sinceEventMs} мс.`,
+            result.status === "ok" ? "ok" : "error"
+          );
+          elements.state.textContent = "Вызов выполнен";
+          elements.state.className = "badge ok";
+        } catch (error) {
+          showResult(`Ошибка: ${error}`, "error");
+          elements.state.textContent = "Ошибка вызова";
+          elements.state.className = "badge error";
+        } finally {
+          elements.run.disabled = false;
+        }
+      });
+
+      elements.close.addEventListener("click", () => invoke("close_settings"));
+      elements.quit.addEventListener("click", () => invoke("quit_app"));
+      window.addEventListener("DOMContentLoaded", loadStatus);
+      loadStatus();
+    </script>
+  </body>
+</html>

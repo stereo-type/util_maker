@@ -1,3 +1,7 @@
 .idea
 .env
 /.cache/util-maker-dev/
+/.cache/windows-build/
+/target/
+/dist/
+/apps/desktop/gen/

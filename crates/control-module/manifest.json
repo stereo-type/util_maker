@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "id": "org.utilmaker.control",
+  "publisher": "org.utilmaker",
+  "name": "Контрольный модуль",
+  "version": "0.1.0",
+  "hostApi": ">=1.0.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "bin/control-module.exe",
+    "linux-x64": "bin/control-module"
+  },
+  "icon": "assets/icon.png",
+  "capabilities": [],
+  "actions": [
+    {
+      "id": "ping",
+      "name": "Проверить связь",
+      "description": "Вернуть подтверждение из отдельного процесса по IPC",
+      "recommendedHotkeys": ["Ctrl+Shift+U"]
+    }
+  ]
+}

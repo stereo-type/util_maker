@@ -1,0 +1,14 @@
+[package]
+name = "util-maker-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Переносимое ядро Util Maker: манифесты, реестр и запуск модулей по IPC"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+semver.workspace = true
+thiserror.workspace = true
+util-maker-sdk.workspace = true

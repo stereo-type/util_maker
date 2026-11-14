@@ -1,0 +1,363 @@
+//! Двунаправленный JSON-RPC 2.0 по stdin/stdout дочернего процесса.
+//!
+//! Один объект UTF-8 на строку, предел 1 МиБ. Чтение stdout идёт в отдельном
+//! потоке, поэтому таймаут не блокирует вызывающего навсегда.
+
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use semver::Version;
+use serde_json::{json, Value};
+use util_maker_sdk::{
+    error_codes, CallContext, InitializeParams, InitializeResult, InvocationSource, InvokeRequest,
+    InvokeResult, HOST_API_VERSION, INITIALIZE_TIMEOUT, JSONRPC_VERSION, MAX_MESSAGE_BYTES,
+    SHUTDOWN_TIMEOUT,
+};
+
+use crate::error::CoreError;
+
+/// Приёмник диагностических строк модуля (stderr и служебные сообщения).
+pub type Logger = Arc<dyn Fn(&str) + Send + Sync>;
+
+enum Incoming {
+    Line(String),
+    Closed,
+}
+
+/// Запущенный процесс микроприложения с открытым каналом JSON-RPC.
+pub struct ModuleProcess {
+    executable: PathBuf,
+    child: Child,
+    stdin: Option<ChildStdin>,
+    incoming: Receiver<Incoming>,
+    stdout_reader: Option<JoinHandle<()>>,
+    stderr_reader: Option<JoinHandle<()>>,
+    logger: Logger,
+    next_id: u64,
+}
+
+impl ModuleProcess {
+    /// Запускает модуль, выводя диагностику в stderr родителя.
+    pub fn spawn(executable: &Path) -> Result<Self, CoreError> {
+        Self::spawn_with_logger(executable, Arc::new(|line: &str| eprintln!("{line}")))
+    }
+
+    /// Запускает модуль с собственным приёмником диагностики.
+    pub fn spawn_with_logger(executable: &Path, logger: Logger) -> Result<Self, CoreError> {
+        let mut command = Command::new(executable);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW: консоль модуля не должна мелькать поверх рабочего стола.
+            command.creation_flags(0x0800_0000);
+        }
+        let mut child = command.spawn().map_err(|source| CoreError::Spawn {
+            path: executable.display().to_string(),
+            source,
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| CoreError::Spawn {
+            path: executable.display().to_string(),
+            source: std::io::Error::other("stdin модуля недоступен"),
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| CoreError::Spawn {
+            path: executable.display().to_string(),
+            source: std::io::Error::other("stdout модуля недоступен"),
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| CoreError::Spawn {
+            path: executable.display().to_string(),
+            source: std::io::Error::other("stderr модуля недоступен"),
+        })?;
+
+        let (sender, incoming) = mpsc::channel();
+        let stdout_reader = thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        if sender.send(Incoming::Line(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = sender.send(Incoming::Closed);
+        });
+
+        let stderr_logger = logger.clone();
+        let stderr_reader = thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    stderr_logger(&format!("[module] {line}"));
+                }
+            }
+        });
+
+        Ok(Self {
+            executable: executable.to_path_buf(),
+            child,
+            stdin: Some(stdin),
+            incoming,
+            stdout_reader: Some(stdout_reader),
+            stderr_reader: Some(stderr_reader),
+            logger,
+            next_id: 0,
+        })
+    }
+
+    /// Идентификатор дочернего процесса для журнала и замеров.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Путь к исполняемому файлу модуля.
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    /// Согласует версию API и возможности. Ожидание ограничено 3 секундами.
+    pub fn initialize(&mut self, module_id: &str) -> Result<InitializeResult, CoreError> {
+        let params = InitializeParams {
+            host_api: HOST_API_VERSION.to_owned(),
+            module_id: module_id.to_owned(),
+            capabilities: Vec::new(),
+        };
+        let result = self.request(
+            "initialize",
+            serde_json::to_value(params)?,
+            INITIALIZE_TIMEOUT,
+        )?;
+        let initialized: InitializeResult = serde_json::from_value(result)
+            .map_err(|error| CoreError::Protocol(format!("ответ initialize: {error}")))?;
+        let host = Version::parse(HOST_API_VERSION)
+            .map_err(|error| CoreError::IncompatibleApi(error.to_string()))?;
+        let module = Version::parse(&initialized.api_version).map_err(|error| {
+            CoreError::IncompatibleApi(format!(
+                "модуль вернул некорректную версию API {}: {error}",
+                initialized.api_version
+            ))
+        })?;
+        if host.major != module.major {
+            return Err(CoreError::IncompatibleApi(format!(
+                "хост {} несовместим с модулем {}",
+                host, module
+            )));
+        }
+        (self.logger)(&format!(
+            "[ipc] модуль {} готов, api {}, pid {}",
+            initialized.module_id,
+            initialized.api_version,
+            self.pid()
+        ));
+        Ok(initialized)
+    }
+
+    /// Передаёт действие и ждёт конечный исход.
+    pub fn invoke(
+        &mut self,
+        call_id: &str,
+        action_id: &str,
+        source: InvocationSource,
+        timeout: Duration,
+    ) -> Result<InvokeResult, CoreError> {
+        let params = InvokeRequest {
+            call_id: call_id.to_owned(),
+            action_id: action_id.to_owned(),
+            context: CallContext { source },
+        };
+        let result = self.request("invoke", serde_json::to_value(params)?, timeout)?;
+        serde_json::from_value(result)
+            .map_err(|error| CoreError::Protocol(format!("ответ invoke: {error}")))
+    }
+
+    /// Просит модуль отменить активный вызов.
+    pub fn cancel(&mut self, call_id: &str) -> Result<(), CoreError> {
+        let id = self.next_id();
+        self.send_value(&json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": "cancel",
+            "params": {"callId": call_id},
+        }))?;
+        self.wait_result(id, "cancel", Duration::from_secs(1))
+            .map(|_| ())
+    }
+
+    /// Штатно завершает процесс, а при отказе убивает его.
+    pub fn shutdown(mut self) {
+        let _ = self.request("shutdown", Value::Null, SHUTDOWN_TIMEOUT);
+        let _ = self.wait_for_exit(SHUTDOWN_TIMEOUT);
+        self.terminate();
+    }
+
+    fn next_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    fn send_value(&mut self, value: &Value) -> Result<(), CoreError> {
+        let line = serde_json::to_string(value)?;
+        if line.len() > MAX_MESSAGE_BYTES {
+            return Err(CoreError::MessageTooLarge);
+        }
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| CoreError::ProcessExited("поток stdin модуля закрыт".to_owned()))?;
+        stdin.write_all(line.as_bytes())?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
+        Ok(())
+    }
+
+    fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, CoreError> {
+        let id = self.next_id();
+        self.send_value(&json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": method,
+            "params": params,
+        }))?;
+        self.wait_result(id, method, timeout)
+    }
+
+    fn wait_result(
+        &mut self,
+        expected_id: u64,
+        method: &str,
+        timeout: Duration,
+    ) -> Result<Value, CoreError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(CoreError::Timeout {
+                    method: method.to_owned(),
+                    timeout,
+                });
+            }
+            match self.incoming.recv_timeout(remaining) {
+                Ok(Incoming::Line(line)) => {
+                    if line.len() > MAX_MESSAGE_BYTES {
+                        return Err(CoreError::MessageTooLarge);
+                    }
+                    let value: Value = serde_json::from_str(&line).map_err(|error| {
+                        CoreError::Protocol(format!("некорректный JSON от модуля: {error}"))
+                    })?;
+                    if !has_id(&value, expected_id) {
+                        (self.logger)(&format!(
+                            "[ipc] пропущено сообщение без ожидаемого id {expected_id}: {}",
+                            truncate(&line)
+                        ));
+                        continue;
+                    }
+                    if let Some(error) = value.get("error") {
+                        let code = error
+                            .get("code")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(error_codes::INTERNAL_ERROR);
+                        let message = error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("без описания")
+                            .to_owned();
+                        return Err(CoreError::Module { code, message });
+                    }
+                    return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+                }
+                Ok(Incoming::Closed) => {
+                    return Err(CoreError::ProcessExited(self.exit_description()));
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(CoreError::Timeout {
+                        method: method.to_owned(),
+                        timeout,
+                    });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(CoreError::ProcessExited(self.exit_description()));
+                }
+            }
+        }
+    }
+
+    fn exit_description(&mut self) -> String {
+        match self.child.try_wait() {
+            Ok(Some(status)) => format!("код {status}"),
+            Ok(None) => "процесс ещё работает, но закрыл stdout".to_owned(),
+            Err(error) => format!("не удалось получить код: {error}"),
+        }
+    }
+
+    fn wait_for_exit(&mut self, timeout: Duration) -> Result<(), CoreError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.child.try_wait()? {
+                Some(_) => return Ok(()),
+                None if Instant::now() >= deadline => {
+                    return Err(CoreError::Timeout {
+                        method: "exit".to_owned(),
+                        timeout,
+                    })
+                }
+                None => thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
+
+    fn terminate(&mut self) {
+        self.stdin.take();
+        let running = matches!(self.child.try_wait(), Ok(None));
+        if running {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        if let Some(handle) = self.stdout_reader.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.stderr_reader.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for ModuleProcess {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+fn has_id(value: &Value, expected: u64) -> bool {
+    match value.get("id") {
+        Some(Value::Number(number)) => number.as_u64() == Some(expected),
+        Some(Value::String(text)) => text == &expected.to_string(),
+        _ => false,
+    }
+}
+
+fn truncate(line: &str) -> String {
+    const LIMIT: usize = 256;
+    if line.len() <= LIMIT {
+        return line.to_owned();
+    }
+    let mut end = LIMIT;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}

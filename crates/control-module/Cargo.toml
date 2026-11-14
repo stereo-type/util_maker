@@ -1,0 +1,15 @@
+[package]
+name = "util-maker-control-module"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Контрольный модуль прототипа Util Maker"
+
+[[bin]]
+name = "control-module"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+util-maker-sdk.workspace = true

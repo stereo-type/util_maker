@@ -3,6 +3,7 @@
 //! Крейт не зависит от Tauri, Win32 и графической сессии: он работает в тестах
 //! на Ubuntu и используется нативным хостом на границе приложения.
 
+pub mod diagnostics;
 pub mod error;
 pub mod hotkeys;
 pub mod ipc;

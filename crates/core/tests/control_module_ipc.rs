@@ -1,8 +1,9 @@
 //! Проверка контракта IPC без рабочего стола: настоящий процесс контрольного
 //! модуля, рукопожатие и handler действия через stdin/stdout.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+mod support;
+
+use std::path::PathBuf;
 use std::time::Duration;
 
 use util_maker_core::ipc::ModuleProcess;
@@ -13,49 +14,7 @@ use util_maker_sdk::{InvocationSource, InvokeStatus, HOST_API_VERSION};
 const MODULE_ID: &str = "org.utilmaker.control";
 
 fn module_binary() -> PathBuf {
-    if let Some(path) = std::env::var_os("UTIL_MAKER_CONTROL_MODULE") {
-        return PathBuf::from(path);
-    }
-    let executable = std::env::current_exe().expect("путь к тестовому исполняемому файлу");
-    let target_root = executable
-        .ancestors()
-        .find(|path| path.file_name().is_some_and(|name| name == "target"))
-        .map(PathBuf::from)
-        .expect("каталог target в пути тестового файла");
-    let name = if cfg!(windows) {
-        "control-module.exe"
-    } else {
-        "control-module"
-    };
-    let mut found = Vec::new();
-    collect_binaries(&target_root, name, 0, &mut found);
-    found
-        .into_iter()
-        .max_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok())
-        .unwrap_or_else(|| target_root.join(name))
-}
-
-/// Ищет бинарник по всему target: раскладка Cargo может отличаться между версиями.
-fn collect_binaries(directory: &Path, name: &str, depth: usize, found: &mut Vec<PathBuf>) {
-    if depth > 8 {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            if entry.file_name().to_string_lossy() == "incremental" {
-                continue;
-            }
-            collect_binaries(&entry.path(), name, depth + 1, found);
-        } else if file_type.is_file() && entry.file_name().to_string_lossy() == name {
-            found.push(entry.path());
-        }
-    }
+    support::binary("control-module")
 }
 
 fn manifest_path() -> PathBuf {

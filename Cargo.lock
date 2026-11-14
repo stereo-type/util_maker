@@ -4237,6 +4237,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "util-maker-fixture-module"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "util-maker-sdk"
 version = "0.1.0"
 dependencies = [

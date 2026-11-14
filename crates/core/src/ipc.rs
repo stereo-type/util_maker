@@ -44,12 +44,22 @@ pub struct ModuleProcess {
 impl ModuleProcess {
     /// Запускает модуль, выводя диагностику в stderr родителя.
     pub fn spawn(executable: &Path) -> Result<Self, CoreError> {
-        Self::spawn_with_logger(executable, Arc::new(|line: &str| eprintln!("{line}")))
+        Self::spawn_with_args(executable, &[], Arc::new(|line: &str| eprintln!("{line}")))
     }
 
     /// Запускает модуль с собственным приёмником диагностики.
     pub fn spawn_with_logger(executable: &Path, logger: Logger) -> Result<Self, CoreError> {
+        Self::spawn_with_args(executable, &[], logger)
+    }
+
+    /// Запускает модуль с аргументами командной строки и приёмником диагностики.
+    pub fn spawn_with_args(
+        executable: &Path,
+        args: &[&str],
+        logger: Logger,
+    ) -> Result<Self, CoreError> {
         let mut command = Command::new(executable);
+        command.args(args);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -132,11 +142,19 @@ impl ModuleProcess {
             module_id: module_id.to_owned(),
             capabilities: Vec::new(),
         };
-        let result = self.request(
+        let result = match self.request(
             "initialize",
             serde_json::to_value(params)?,
             INITIALIZE_TIMEOUT,
-        )?;
+        ) {
+            Ok(result) => result,
+            Err(CoreError::Module { code, message })
+                if code == error_codes::HOST_API_INCOMPATIBLE =>
+            {
+                return Err(CoreError::IncompatibleApi(message));
+            }
+            Err(error) => return Err(error),
+        };
         let initialized: InitializeResult = serde_json::from_value(result)
             .map_err(|error| CoreError::Protocol(format!("ответ initialize: {error}")))?;
         let host = Version::parse(HOST_API_VERSION)

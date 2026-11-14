@@ -4,6 +4,7 @@ members = [
     "crates/sdk",
     "crates/core",
     "crates/control-module",
+    "crates/fixture-module",
     "apps/desktop",
 ]
 

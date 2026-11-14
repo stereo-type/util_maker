@@ -172,6 +172,28 @@
         </div>
       </section>
 
+      <section class="card" aria-labelledby="package-title">
+        <h2 id="package-title">Установка пакета</h2>
+        <p class="hint">Укажите путь к .umpkg, издателя и открытый ключ Ed25519 (64 hex-символа).</p>
+        <label class="check" style="display: block; margin-top: 10px">
+          <span>Файл пакета</span>
+          <input id="package-path" class="hotkey-input" type="text" autocomplete="off" style="margin-top: 6px" placeholder="D:\Util Maker\control.umpkg" />
+        </label>
+        <label class="check" style="display: block; margin-top: 10px">
+          <span>Издатель</span>
+          <input id="package-publisher" class="hotkey-input" type="text" autocomplete="off" style="margin-top: 6px" placeholder="org.utilmaker" />
+        </label>
+        <label class="check" style="display: block; margin-top: 10px">
+          <span>Открытый ключ</span>
+          <input id="package-key" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" style="margin-top: 6px" placeholder="64 hex-символа" />
+        </label>
+        <div class="actions">
+          <button id="preview-package" type="button">Проверить</button>
+          <button id="install-package" class="primary" type="button">Установить</button>
+        </div>
+        <div class="result" id="package-result" role="status" aria-live="polite">Проверка появится здесь.</div>
+      </section>
+
       <section class="card" aria-labelledby="startup-title">
         <h2 id="startup-title">Запуск</h2>
         <label class="check">
@@ -224,6 +246,12 @@
         detail: document.getElementById("plugin-detail"),
         actions: document.getElementById("plugin-actions"),
         result: document.getElementById("result"),
+        packagePath: document.getElementById("package-path"),
+        packagePublisher: document.getElementById("package-publisher"),
+        packageKey: document.getElementById("package-key"),
+        packagePreview: document.getElementById("preview-package"),
+        packageInstall: document.getElementById("install-package"),
+        packageResult: document.getElementById("package-result"),
         log: document.getElementById("log-path"),
         config: document.getElementById("config-path"),
         build: document.getElementById("build-kind"),
@@ -359,6 +387,18 @@
         for (const action of plugin.actions) {
           elements.actions.append(actionRow(plugin, action));
         }
+        const packageActions = document.createElement("div");
+        packageActions.className = "actions";
+        const rollback = document.createElement("button");
+        rollback.type = "button";
+        rollback.textContent = "Откатить версию";
+        rollback.addEventListener("click", () => rollbackCurrentPlugin(plugin));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Удалить пакет";
+        remove.addEventListener("click", () => removeCurrentPlugin(plugin));
+        packageActions.append(rollback, remove);
+        elements.actions.append(packageActions);
       }
 
       async function loadPlugins() {
@@ -505,6 +545,70 @@
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && !elements.modal.hidden) closeHotkey();
       });
+
+      function packageArgs() {
+        return {
+          packagePath: elements.packagePath.value.trim(),
+          publisher: elements.packagePublisher.value.trim(),
+          keyHex: elements.packageKey.value.trim(),
+        };
+      }
+
+      async function previewPackage() {
+        const args = packageArgs();
+        elements.packageResult.className = "result";
+        elements.packageResult.textContent = "Проверка подписи и содержимого…";
+        try {
+          const preview = await invoke("preview_package", args);
+          elements.packageResult.textContent =
+            `${preview.name} ${preview.version}\nИздатель: ${preview.publisher}\n` +
+            `Действия: ${preview.actions.map((action) => action.name).join(", ") || "нет"}\n` +
+            `Файлов: ${preview.fileCount}, размер: ${preview.totalBytes} байт.`;
+        } catch (error) {
+          elements.packageResult.className = "result error";
+          elements.packageResult.textContent = `Ошибка проверки: ${error}`;
+        }
+      }
+
+      async function installPackage() {
+        const args = packageArgs();
+        elements.packageResult.className = "result";
+        elements.packageResult.textContent = "Установка…";
+        try {
+          const installed = await invoke("install_package", args);
+          elements.packageResult.className = "result ok";
+          elements.packageResult.textContent = `Установлено: ${installed.name} ${installed.version}.`;
+          await loadPlugins();
+        } catch (error) {
+          elements.packageResult.className = "result error";
+          elements.packageResult.textContent = `Ошибка установки: ${error}`;
+        }
+      }
+
+      async function rollbackCurrentPlugin(plugin) {
+        try {
+          const version = await invoke("rollback_package", { pluginId: plugin.id });
+          await loadPlugins();
+          showResult(`Откат выполнен: ${version}.`, "ok");
+        } catch (error) {
+          showResult(`Не удалось откатить: ${error}`, "error");
+        }
+      }
+
+      async function removeCurrentPlugin(plugin) {
+        if (!window.confirm(`Удалить пакет ${plugin.name}?`)) return;
+        try {
+          await invoke("remove_package", { pluginId: plugin.id });
+          currentPlugin = null;
+          elements.detail.hidden = true;
+          await loadPlugins();
+        } catch (error) {
+          showResult(`Не удалось удалить: ${error}`, "error");
+        }
+      }
+
+      elements.packagePreview.addEventListener("click", previewPackage);
+      elements.packageInstall.addEventListener("click", installPackage);
 
       async function loadAutostart() {
         try {

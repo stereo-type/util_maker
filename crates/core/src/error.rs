@@ -26,6 +26,8 @@ pub enum CoreError {
     IncompatibleApi(String),
     #[error("действие {0} не найдено")]
     ActionNotFound(String),
+    #[error("вызов {call_id} отменён")]
+    Cancelled { call_id: String },
     #[error("манифест модуля отклонён: {0}")]
     Manifest(#[from] ManifestError),
     #[error(transparent)]
@@ -46,6 +48,7 @@ impl CoreError {
             Self::Module { .. } => "module_error",
             Self::IncompatibleApi(_) => "host_api_incompatible",
             Self::ActionNotFound(_) => "action_not_found",
+            Self::Cancelled { .. } => "cancelled",
             Self::Manifest(_) => "manifest_invalid",
             Self::Io(_) => "io_error",
             Self::Json(_) => "json_error",

@@ -40,6 +40,7 @@ pub struct ModuleEntry {
 /// Конечный результат вызова с измеренной длительностью.
 #[derive(Debug, Clone)]
 pub struct InvokeOutcome {
+    pub call_id: String,
     pub module_id: String,
     pub action_id: String,
     pub action_name: String,
@@ -155,6 +156,7 @@ impl Registry {
             ));
         }
         Ok(InvokeOutcome {
+            call_id,
             module_id: entry.manifest.id.clone(),
             action_id: action.id.clone(),
             action_name: action.name.clone(),

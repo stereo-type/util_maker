@@ -6,6 +6,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -188,12 +189,44 @@ impl ModuleProcess {
         source: InvocationSource,
         timeout: Duration,
     ) -> Result<InvokeResult, CoreError> {
+        let never = AtomicBool::new(false);
+        self.invoke_cancellable(call_id, action_id, source, timeout, &never)
+    }
+
+    /// Передаёт действие и прерывает ожидание, когда поднят флаг отмены.
+    ///
+    /// После отмены модуль получает уведомление `cancel`; если он не завершился
+    /// за отведённую паузу, процесс убивается. Поздний ответ уже не читается.
+    pub fn invoke_cancellable(
+        &mut self,
+        call_id: &str,
+        action_id: &str,
+        source: InvocationSource,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<InvokeResult, CoreError> {
         let params = InvokeRequest {
             call_id: call_id.to_owned(),
             action_id: action_id.to_owned(),
             context: CallContext { source },
         };
-        let result = self.request("invoke", serde_json::to_value(params)?, timeout)?;
+        let id = self.next_id();
+        self.send_value(&json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": "invoke",
+            "params": serde_json::to_value(params)?,
+        }))?;
+        let result = match self.wait_result(id, "invoke", timeout, Some(cancel)) {
+            Ok(result) => result,
+            Err(CoreError::Cancelled { .. }) => {
+                self.cancel_and_stop(call_id);
+                return Err(CoreError::Cancelled {
+                    call_id: call_id.to_owned(),
+                });
+            }
+            Err(error) => return Err(error),
+        };
         serde_json::from_value(result)
             .map_err(|error| CoreError::Protocol(format!("ответ invoke: {error}")))
     }
@@ -207,7 +240,7 @@ impl ModuleProcess {
             "method": "cancel",
             "params": {"callId": call_id},
         }))?;
-        self.wait_result(id, "cancel", Duration::from_secs(1))
+        self.wait_result(id, "cancel", Duration::from_secs(1), None)
             .map(|_| ())
     }
 
@@ -251,7 +284,7 @@ impl ModuleProcess {
             "method": method,
             "params": params,
         }))?;
-        self.wait_result(id, method, timeout)
+        self.wait_result(id, method, timeout, None)
     }
 
     fn wait_result(
@@ -259,9 +292,15 @@ impl ModuleProcess {
         expected_id: u64,
         method: &str,
         timeout: Duration,
+        cancel: Option<&AtomicBool>,
     ) -> Result<Value, CoreError> {
         let deadline = Instant::now() + timeout;
         loop {
+            if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                return Err(CoreError::Cancelled {
+                    call_id: String::new(),
+                });
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(CoreError::Timeout {
@@ -269,7 +308,13 @@ impl ModuleProcess {
                     timeout,
                 });
             }
-            match self.incoming.recv_timeout(remaining) {
+            // Проверяем отмену не реже, чем раз в 50 мс.
+            let slice = if cancel.is_some() {
+                remaining.min(Duration::from_millis(50))
+            } else {
+                remaining
+            };
+            match self.incoming.recv_timeout(slice) {
                 Ok(Incoming::Line(line)) => {
                     if line.len() > MAX_MESSAGE_BYTES {
                         return Err(CoreError::MessageTooLarge);
@@ -302,16 +347,37 @@ impl ModuleProcess {
                     return Err(CoreError::ProcessExited(self.exit_description()));
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    return Err(CoreError::Timeout {
-                        method: method.to_owned(),
-                        timeout,
-                    });
+                    if Instant::now() >= deadline {
+                        return Err(CoreError::Timeout {
+                            method: method.to_owned(),
+                            timeout,
+                        });
+                    }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(CoreError::ProcessExited(self.exit_description()));
                 }
             }
         }
+    }
+
+    /// Отправляет `cancel`, даёт процессу короткую паузу и завершает его.
+    fn cancel_and_stop(&mut self, call_id: &str) {
+        let id = self.next_id();
+        let _ = self.send_value(&json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": "cancel",
+            "params": {"callId": call_id},
+        }));
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.terminate();
     }
 
     fn exit_description(&mut self) -> String {

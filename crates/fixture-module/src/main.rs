@@ -86,6 +86,20 @@ fn main() {
                 }
             }
             "invoke" => {
+                if mode == "crash" {
+                    std::process::exit(2);
+                }
+                if mode == "hang" {
+                    sleep(Duration::from_secs(30));
+                }
+                if mode == "late-invoke" {
+                    sleep(Duration::from_millis(200));
+                }
+                let call_id = request
+                    .get("params")
+                    .and_then(|params| params.get("callId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 write_response(
                     &mut stdout,
                     json!({
@@ -93,7 +107,7 @@ fn main() {
                         "id": id,
                         "result": {
                             "status": "ok",
-                            "message": "fixture-module: вызов выполнен"
+                            "message": format!("fixture-module: вызов {call_id} выполнен")
                         }
                     }),
                 );

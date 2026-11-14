@@ -45,6 +45,7 @@ impl Module for ControlModule {
                     self.info.version, request.call_id
                 ))
                 .with_data(json!({
+                    "callId": request.call_id,
                     "pid": pid,
                     "moduleVersion": self.info.version,
                     "apiVersion": self.info.host_api,

@@ -554,16 +554,29 @@
         };
       }
 
+      async function keyFingerprint(hex) {
+        try {
+          const bytes = new Uint8Array(hex.replace(/^0x/i, "").match(/.{2}/g).map((pair) => parseInt(pair, 16)));
+          const digest = await crypto.subtle.digest("SHA-256", bytes);
+          return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+        } catch {
+          return "не удалось вычислить";
+        }
+      }
+
       async function previewPackage() {
         const args = packageArgs();
         elements.packageResult.className = "result";
         elements.packageResult.textContent = "Проверка подписи и содержимого…";
         try {
           const preview = await invoke("preview_package", args);
+          const fingerprint = await keyFingerprint(args.keyHex);
           elements.packageResult.textContent =
             `${preview.name} ${preview.version}\nИздатель: ${preview.publisher}\n` +
             `Действия: ${preview.actions.map((action) => action.name).join(", ") || "нет"}\n` +
-            `Файлов: ${preview.fileCount}, размер: ${preview.totalBytes} байт.`;
+            `Возможности: ${preview.capabilities.join(", ") || "нет"}\n` +
+            `Файлов: ${preview.fileCount}, размер: ${preview.totalBytes} байт.\n` +
+            `Отпечаток ключа: ${fingerprint}`;
         } catch (error) {
           elements.packageResult.className = "result error";
           elements.packageResult.textContent = `Ошибка проверки: ${error}`;

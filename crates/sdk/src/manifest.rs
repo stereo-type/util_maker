@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 /// Версия схемы манифеста, которую понимает этот SDK.
 pub const MANIFEST_VERSION: u32 = 1;
 
+/// Файл полезной нагрузки пакета с ожидаемым SHA-256.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageFile {
+    pub path: String,
+    pub sha256: String,
+}
+
 /// Описание микроприложения из `.umpkg`/каталога установки.
 ///
 /// Поля объявлены в camelCase, чтобы файл читался без преобразований.
@@ -29,6 +37,8 @@ pub struct Manifest {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub actions: Vec<Action>,
+    #[serde(default)]
+    pub files: Vec<PackageFile>,
 }
 
 /// Действие, которое модуль объявляет в манифесте.

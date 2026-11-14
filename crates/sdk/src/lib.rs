@@ -8,7 +8,7 @@ pub mod manifest;
 pub mod protocol;
 pub mod server;
 
-pub use manifest::{Action, Manifest, ManifestError, MANIFEST_VERSION};
+pub use manifest::{Action, Manifest, ManifestError, PackageFile, MANIFEST_VERSION};
 pub use protocol::{
     error_codes, CallContext, InitializeParams, InitializeResult, InvocationSource, InvokeRequest,
     InvokeResult, InvokeStatus, RpcError, HOST_API_VERSION, INITIALIZE_TIMEOUT, JSONRPC_VERSION,

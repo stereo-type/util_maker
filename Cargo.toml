@@ -6,6 +6,7 @@ members = [
     "crates/control-module",
     "crates/fixture-module",
     "crates/platform",
+    "crates/packages",
     "apps/desktop",
 ]
 

@@ -23,6 +23,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+use util_maker_core::diagnostics::{DiagnosticsLog, LogEntry};
 use util_maker_core::hotkeys::{
     AssignmentRecord, Candidate, CheckResult, Confirmation, HotkeyPlatform, HotkeyRegistry,
     HotkeyStore, Owner, RegistrationError, StoreError,
@@ -45,6 +46,7 @@ struct AppState {
     last_result: Mutex<Option<LastResult>>,
     catalog: CatalogState,
     tray_actions: Mutex<BTreeMap<String, ActionRef>>,
+    metrics: Mutex<DiagnosticsLog>,
 }
 
 /// Каталог установленных модулей и реестр ядра.
@@ -465,10 +467,13 @@ fn main() {
             quit_app
         ])
         .setup(|app| {
+            let metrics = DiagnosticsLog::open(&logging::log_directory(), 1_000_000)
+                .map_err(|error| format!("журнал метрик: {error}"))?;
             let state = AppState {
                 last_result: Mutex::new(None),
                 catalog: CatalogState::open(app.handle())?,
                 tray_actions: Mutex::new(BTreeMap::new()),
+                metrics: Mutex::new(metrics),
             };
             app.manage(state);
             let (runtime, events) = ShortcutRuntime::start(app.handle())?;
@@ -804,6 +809,21 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                     status: "ok".to_owned(),
                 },
             );
+            let first_frame = started.elapsed().as_millis() as u64;
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Ok(mut metrics) = state.metrics.lock() {
+                    let entry = LogEntry::invocation(
+                        env!("CARGO_PKG_VERSION"),
+                        outcome.module_id.clone(),
+                        outcome.action_id.clone(),
+                        outcome.elapsed.as_millis() as u64,
+                        "ok",
+                        None,
+                    )
+                    .with_first_frame(first_frame, outcome.cold);
+                    let _ = metrics.record(&entry);
+                }
+            }
         }
         Err(error) => {
             logging::write(&format!(
@@ -823,6 +843,20 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                     status: "error".to_owned(),
                 },
             );
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Ok(mut metrics) = state.metrics.lock() {
+                    let entry = LogEntry::invocation(
+                        env!("CARGO_PKG_VERSION"),
+                        target.module_id.clone(),
+                        target.action_id.clone(),
+                        started.elapsed().as_millis() as u64,
+                        "error",
+                        Some("invoke_failed"),
+                    )
+                    .with_message(&error);
+                    let _ = metrics.record(&entry);
+                }
+            }
         }
     }
 }

@@ -1,9 +1,10 @@
-# Замеры прототипа Util Maker на Windows 11 x64.
+﻿# Замеры прототипа Util Maker на Windows 11 x64.
 #
 # Запуск из обычной сессии PowerShell без административных прав:
 #   .\scripts\measure-windows.ps1                     # 60 с простоя
 #   .\scripts\measure-windows.ps1 -Seconds 600        # 10 минут
-#   .\scripts\measure-windows.ps1 -InvokeBenchmark    # p95 по журналу
+#   .\scripts\measure-windows.ps1 -InvokeBenchmark -InvokeCount 50
+#                                                     # 50 холодных вызовов и p95
 #
 # Private Working Set снимается счётчиком Win32_PerfRawData_PerfProc_Process
 # (WorkingSetPrivate) для хоста и всех его потомков: процесса модуля и
@@ -13,6 +14,10 @@ param(
     [int]$Seconds = 60,
     [int]$IntervalSeconds = 1,
     [switch]$InvokeBenchmark,
+    # Сколько холодных вызовов сделать перед разбором журнала. 0 — только разобрать готовый журнал.
+    [int]$InvokeCount = 0,
+    # Сочетание, которое нажимает скрипт; по умолчанию сочетание контрольного модуля.
+    [string]$Hotkey = "Ctrl+Shift+U",
     # Путь виден в настройках приложения: <папка установки>\logs\util-maker.log.
     [string]$LogPath = "$env:LOCALAPPDATA\Util Maker\logs\util-maker.log",
     # Структурированный журнал с firstFrameMs, moduleId, actionId и cold.
@@ -20,6 +25,67 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($InvokeCount -gt 0) {
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class UtilMakerKeyboard {
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+}
+"@
+
+    function Send-GlobalHotkey([string]$combo) {
+        $modifiers = @{
+            "CTRL" = 0x11; "CONTROL" = 0x11; "SHIFT" = 0x10;
+            "ALT" = 0x12; "WIN" = 0x5B
+        }
+        $parts = $combo.Split("+") | ForEach-Object { $_.Trim().ToUpperInvariant() }
+        $keyName = $parts[-1]
+        $keyCode = if ($keyName.Length -eq 1) { [byte][char]$keyName } else {
+            switch ($keyName) {
+                "ENTER" { 0x0D } "ESC" { 0x1B } "TAB" { 0x09 }
+                default { throw "Неизвестная клавиша в Hotkey: $keyName" }
+            }
+        }
+        $pressed = @()
+        foreach ($part in $parts[0..($parts.Count - 2)]) {
+            if (-not $modifiers.ContainsKey($part)) { throw "Неизвестный модификатор: $part" }
+            $code = [byte]$modifiers[$part]
+            [UtilMakerKeyboard]::keybd_event($code, 0, 0, [UIntPtr]::Zero)
+            $pressed += $code
+        }
+        [UtilMakerKeyboard]::keybd_event([byte]$keyCode, 0, 0, [UIntPtr]::Zero)
+        [UtilMakerKeyboard]::keybd_event([byte]$keyCode, 0, 2, [UIntPtr]::Zero)
+        [array]::Reverse($pressed)
+        foreach ($code in $pressed) {
+            [UtilMakerKeyboard]::keybd_event([byte]$code, 0, 2, [UIntPtr]::Zero)
+        }
+    }
+
+    if (-not (Get-Process util-maker-desktop -ErrorAction SilentlyContinue)) {
+        throw "Util Maker не запущен. Запустите приложение и повторите замер."
+    }
+    "Холодных вызовов: $InvokeCount, сочетание: $Hotkey"
+    for ($index = 1; $index -le $InvokeCount; $index++) {
+        $before = if (Test-Path $MetricsPath) {
+            (Get-Content -Path $MetricsPath | Measure-Object).Count
+        } else { 0 }
+        Send-GlobalHotkey $Hotkey
+        $deadline = (Get-Date).AddSeconds(10)
+        do {
+            Start-Sleep -Milliseconds 50
+            $after = if (Test-Path $MetricsPath) {
+                (Get-Content -Path $MetricsPath | Measure-Object).Count
+            } else { 0 }
+        } while ($after -le $before -and (Get-Date) -lt $deadline)
+        if ($after -le $before) {
+            throw "Вызов $index не появился в журнале $MetricsPath за 10 с."
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
 
 function Get-ProductProcessIds {
     $all = Get-CimInstance Win32_Process

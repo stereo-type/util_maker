@@ -40,7 +40,7 @@ pub fn init() {
     ));
 }
 
-fn log_directory() -> PathBuf {
+pub fn log_directory() -> PathBuf {
     if let Some(directory) = std::env::var_os("UTIL_MAKER_LOG_DIR") {
         return PathBuf::from(directory);
     }

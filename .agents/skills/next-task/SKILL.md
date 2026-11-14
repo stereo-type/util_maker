@@ -1,11 +1,11 @@
 ---
 name: next-task
-description: Use when the user asks to pick up and implement the next available task from the Util Maker backlog, including “бери следующую задачу” or “take the next task”.
+description: Pick and implement one available Util Maker backlog task, across the project or within a named component. Use for requests such as “бери следующую задачу” or “take the next task in plugins/screenshot”.
 ---
 
 # Take the next Util Maker task
 
-1. Read the [task index](../../../docs/tasks/README.md) from top to bottom. Choose the first card marked **К выполнению** whose dependencies allow work to begin. A dependency needed only for a later Windows check does not prevent starting work on Linux. If no card qualifies, report why and stop.
-2. Read the card and its linked specification. Before implementation, set the card and its index row to **В работе** in the same change. Keep both in sync at every transition.
-3. Implement the card against its acceptance criteria. Follow the [project instructions](../../../AGENTS.md) for Make targets, Linux checks, and frontend builds. Record commands and observed results under **Проверка** in the card. Tick only verified criteria. If a blocker prevents further progress, set **Заблокирована** and record what would unblock it.
-4. When the change is ready for review, set **На ревью**. For outstanding Windows checks, leave the criteria open and give the user the revision, local build command, steps, and expected result. Finish with the card link and verification summary. This invocation covers one card. Reserve **Выполнена** for completed review and confirmed acceptance criteria.
+1. Open the [backlog index](../../../docs/tasks/README.md). For a named component, follow its exact queue link. A plugin and its providers have separate queues. Without a scope, check general tasks first, then component queues in the listed order. Within a queue choose the first card marked **📥 К выполнению** whose start dependencies are satisfied. A dependency needed only for later Windows acceptance allows Linux work to start. If the requested scope has no eligible card, report that and finish.
+2. Read the card and its linked specification. Recheck availability before claiming it. Mark the card and its row **🛠️ В работе** together. The owning row is in the component queue for a component task or in the general tasks section of the backlog index for a general task. If another agent has claimed it, repeat selection within the requested scope. Use distinct scopes or assigned cards for concurrent work in separate checkouts, as described in the [task guide](../../../docs/task-workflow.md).
+3. Implement the acceptance criteria using the [project instructions](../../../AGENTS.md) for Make targets, Linux checks and frontend builds. Record commands and observed outcomes under **Проверка** in the card. Tick only verified criteria. If progress is blocked, set **⛔ Заблокирована** in both places and record the condition for resuming.
+4. Set the card and its row to **👁️ На ревью** when ready. For outstanding Windows acceptance, give the user the revision, local build command, manual steps and expected result. Return the card link and verification summary. This invocation covers one card. Reserve **✅ Выполнена** for completed review and confirmed acceptance criteria.

@@ -9,4 +9,4 @@
 - Таймаут 10 с, отдельные ошибки авторизации, квоты, 429, сети и отмены.
 - Тесты используют подменный транспорт и не ходят в сеть.
 
-Крейт — `util-maker-providers`. Настройка — [инструкция](../../docs/providers-setup.md).
+Крейт — `util-maker-providers`. Настройка — [инструкция](../../../docs/blocks/plugins/translator/providers/providers-setup.md).

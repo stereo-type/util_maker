@@ -10,4 +10,4 @@ HTTP-адаптеры Яндекса и Google внутри одного кат�
 - Проверка — `make test`.
 
 Процесс, UI Automation и окно результата ещё не упакованы. Настройка ключей —
-[инструкция](../docs/providers-setup.md).
+[инструкция](../../docs/blocks/plugins/translator/providers/providers-setup.md).

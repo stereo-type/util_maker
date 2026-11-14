@@ -51,7 +51,7 @@ plugins/<plugin-id>/
 ```
 
 `manifest.json` — тот же контракт, который попадёт в `.umpkg`
-([формат пакета](docs/package-format.md)). Плагин запускается по требованию,
+([формат пакета](docs/blocks/packages/package-format.md)). Плагин запускается по требованию,
 получает вызов через `initialize`/`invoke`, при необходимости обращается к
 возможностям хоста и завершается после действия. Падение или зависание
 изолировано процессом.
@@ -74,16 +74,18 @@ make version            # версия и тип сборки
 
 Требуется Docker Engine. Установщик собирается под
 `x86_64-pc-windows-msvc` с cargo-xwin и NSIS; запускать его нужно на Windows 11
-x64. Подробности — в [проверке прототипа](docs/windows-прототип.md).
+x64. Подробности — в [проверке прототипа](docs/blocks/platform/windows/prototype-verification.md).
 
 ## Документация
 
-- [Общее ТЗ](docs/ТЗ.md)
-- [Карта блоков](docs/blocks/README.md)
-- [Список задач](docs/tasks/README.md)
-- [Формат .umpkg](docs/package-format.md)
-- [Проверка на Windows](docs/windows-прототип.md)
-- [Настройка провайдеров](docs/providers-setup.md)
+- [Общее ТЗ](docs/specification.md)
+- [План развития приложения](docs/roadmap.md)
+- [Компоненты приложения и их ТЗ](docs/blocks/README.md)
+- [Очереди задач по компонентам](docs/tasks/README.md)
+- [Правила выбора задачи и передачи на ревью](docs/task-workflow.md)
+- [Формат .umpkg](docs/blocks/packages/package-format.md)
+- [Проверка на Windows](docs/blocks/platform/windows/prototype-verification.md)
+- [Настройка провайдеров](docs/blocks/plugins/translator/providers/providers-setup.md)
 
 ## Текущее состояние
 

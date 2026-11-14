@@ -32,3 +32,7 @@ Linux, контейнер `util-maker-dev:local`:
 - Синтаксис PowerShell-скрипта проверяется на Windows при реальном замере; Linux-тест покрывает разбор журнала, не запуская Windows API.
 
 Ревизия для Windows — `645d24d`: выполнить `scripts/measure-windows.ps1 -InvokeBenchmark` на журнале с 50 вызовами и сверить p95 по каждому `moduleId + actionId` отдельно для `cold=true/false`.
+
+## Замечания ревью
+
+- [Починить замер холодного отклика и описать запуск](metrics-script-runbook.md) — `-InvokeBenchmark` падает, 50 ручных вызовов неприемлемы.

@@ -25,7 +25,7 @@ fn fixture(mode: &str) -> ModuleProcess {
 
 fn control_manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../control-module/manifest.json")
+        .join("../../plugins/control/manifest.json")
         .canonicalize()
         .expect("манифест контрольного модуля")
 }

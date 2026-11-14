@@ -3,18 +3,18 @@ resolver = "2"
 members = [
     "crates/sdk",
     "crates/core",
-    "crates/control-module",
+    "plugins/control",
     "crates/fixture-module",
     "crates/platform",
     "crates/packages",
-    "crates/screenshots",
-    "crates/translator",
-    "crates/providers",
+    "plugins/screenshot",
+    "plugins/translator",
+    "plugins/translator/providers",
     "apps/desktop",
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "proprietary"
 rust-version = "1.90"

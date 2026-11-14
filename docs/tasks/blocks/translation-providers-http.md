@@ -1,6 +1,6 @@
 # Подключить HTTP-адаптеры Яндекса и Google
 
-**Статус** — На ревью
+**Статус** — 👁️ На ревью
 
 **Основание** — [ТЗ блока «Провайдеры»](../../blocks/translation-providers.md).
 
@@ -14,7 +14,7 @@
 
 ## Что сделано
 
-- `crates/providers` — `Profile`, `ProviderHub`, `HttpTransport`, `ReqwestTransport`, `translate` и `check_connection`.
+- `plugins/translator/providers` — `Profile`, `ProviderHub`, `HttpTransport`, `ReqwestTransport`, `translate` и `check_connection`.
 - Яндекс: `Authorization: Api-Key`, `texts`, `targetLanguageCode`, необязательный `sourceLanguageCode`, чтение `translations[0].text`.
 - Google: `key` в URL, `q`, `target`, `format=text`, необязательный `source`, чтение `data.translations[0].translatedText`.
 - Ошибки авторизации, квоты, 429, таймаута, сети и отмены различаются; активный профиль определяет единственный получатель текста.

@@ -266,7 +266,7 @@ fn validate_relative_path(value: &str) -> Result<(), &'static str> {
 mod tests {
     use super::*;
 
-    const CONTROL: &str = include_str!("../../control-module/manifest.json");
+    const CONTROL: &str = include_str!("../../../plugins/control/manifest.json");
 
     #[test]
     fn control_manifest_is_valid() {

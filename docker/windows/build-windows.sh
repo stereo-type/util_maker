@@ -23,7 +23,7 @@ cargo xwin build --release --target x86_64-pc-windows-msvc \
 
 exe="$target_dir/x86_64-pc-windows-msvc/release/util-maker-desktop.exe"
 module="$target_dir/x86_64-pc-windows-msvc/release/control-module.exe"
-manifest="/workspace/crates/control-module/manifest.json"
+manifest="/workspace/plugins/control/manifest.json"
 
 for file in "$exe" "$module" "$manifest"; do
     if [ ! -f "$file" ]; then

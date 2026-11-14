@@ -228,19 +228,22 @@ fn check_dto(result: CheckResult) -> HotkeyCheckDto {
 /// Регистрация прототипа: одно сочетание, пауза и повторная попытка.
 struct ShortcutRuntime {
     service: Mutex<HotkeyService>,
+    combo: Mutex<String>,
     paused: AtomicBool,
     registered: AtomicBool,
     status: Mutex<String>,
 }
 
 impl ShortcutRuntime {
-    fn start() -> Result<(Self, Receiver<HotkeyEvent>), String> {
+    fn start(app: &AppHandle) -> Result<(Self, Receiver<HotkeyEvent>), String> {
         let mut service = HotkeyService::start()?;
         let events = service.take_events();
-        let (registered, status) = register_shortcut(&service);
+        let combo = persisted_shortcut(app).unwrap_or_else(|| CONTROL_SHORTCUT.to_owned());
+        let (registered, status) = register_shortcut(&service, &combo);
         Ok((
             Self {
                 service: Mutex::new(service),
+                combo: Mutex::new(combo),
                 paused: AtomicBool::new(false),
                 registered: AtomicBool::new(registered),
                 status: Mutex::new(status),
@@ -250,8 +253,8 @@ impl ShortcutRuntime {
     }
 }
 
-fn register_shortcut(service: &HotkeyService) -> (bool, String) {
-    match service.register(CONTROL_SHORTCUT, HOTKEY_ID) {
+fn register_shortcut(service: &HotkeyService, combo: &str) -> (bool, String) {
+    match service.register(combo, HOTKEY_ID) {
         Ok(()) => (true, "зарегистрировано".to_owned()),
         Err(RegisterFailure::SystemReserved { function }) => {
             (false, format!("недоступно: {function}"))
@@ -312,11 +315,14 @@ fn main() {
             check_hotkey,
             assign_hotkey,
             set_hotkey_save_failure,
+            plugins,
+            set_plugin_enabled,
+            change_control_shortcut,
             quit_app
         ])
         .setup(|app| {
             setup_tray(app)?;
-            let (runtime, events) = ShortcutRuntime::start()?;
+            let (runtime, events) = ShortcutRuntime::start(app.handle())?;
             let status = runtime.status.lock().expect("статус сочетания").clone();
             app.manage(runtime);
             app.manage(HotkeyDemo::new());
@@ -594,8 +600,9 @@ fn toggle_shortcut_pause(app: &AppHandle) {
     };
     if runtime.paused.load(Ordering::SeqCst) {
         let (registered, status) = {
+            let combo = runtime.combo.lock().expect("сочетание").clone();
             let service = runtime.service.lock().expect("служба сочетаний");
-            register_shortcut(&service)
+            register_shortcut(&service, &combo)
         };
         runtime.registered.store(registered, Ordering::SeqCst);
         if registered {
@@ -630,8 +637,9 @@ fn retry_shortcut(app: &AppHandle) {
         return;
     }
     let (registered, status) = {
+        let combo = runtime.combo.lock().expect("сочетание").clone();
         let service = runtime.service.lock().expect("служба сочетаний");
-        register_shortcut(&service)
+        register_shortcut(&service, &combo)
     };
     runtime.registered.store(registered, Ordering::SeqCst);
     if registered {
@@ -700,6 +708,150 @@ fn platform_key() -> &'static str {
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginActionDto {
+    id: String,
+    name: String,
+    description: String,
+    hotkey: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDto {
+    id: String,
+    name: String,
+    version: String,
+    publisher: String,
+    installed: bool,
+    enabled: bool,
+    status: String,
+    actions: Vec<PluginActionDto>,
+}
+
+#[tauri::command]
+fn plugins(app: AppHandle) -> Vec<PluginDto> {
+    let mut result = Vec::new();
+    if let Ok(directory) = module_directory(&app) {
+        if let Ok(manifest) = Manifest::load(&directory.join("manifest.json")) {
+            let shortcut = app
+                .try_state::<ShortcutRuntime>()
+                .and_then(|runtime| runtime.combo.lock().ok().map(|combo| combo.clone()))
+                .unwrap_or_else(|| CONTROL_SHORTCUT.to_owned());
+            let status = app
+                .try_state::<ShortcutRuntime>()
+                .and_then(|runtime| runtime.status.lock().ok().map(|value| value.clone()))
+                .unwrap_or_else(|| "неизвестно".to_owned());
+            result.push(PluginDto {
+                id: manifest.id.clone(),
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                publisher: manifest.publisher.clone(),
+                installed: true,
+                enabled: !app
+                    .try_state::<ShortcutRuntime>()
+                    .map(|runtime| runtime.paused.load(Ordering::SeqCst))
+                    .unwrap_or(false),
+                status,
+                actions: manifest
+                    .actions
+                    .iter()
+                    .map(|action| PluginActionDto {
+                        id: action.id.clone(),
+                        name: action.name.clone(),
+                        description: action.description().to_owned(),
+                        hotkey: (action.id == CONTROL_ACTION_ID).then(|| shortcut.clone()),
+                    })
+                    .collect(),
+            });
+        }
+    }
+    result.push(PluginDto {
+        id: "org.utilmaker.screenshot".to_owned(),
+        name: "Скриншоты".to_owned(),
+        version: "—".to_owned(),
+        publisher: "org.utilmaker".to_owned(),
+        installed: false,
+        enabled: false,
+        status: "пакет не установлен".to_owned(),
+        actions: Vec::new(),
+    });
+    result.push(PluginDto {
+        id: "org.utilmaker.translator".to_owned(),
+        name: "Переводчик".to_owned(),
+        version: "—".to_owned(),
+        publisher: "org.utilmaker".to_owned(),
+        installed: false,
+        enabled: false,
+        status: "пакет не установлен".to_owned(),
+        actions: Vec::new(),
+    });
+    result
+}
+
+#[tauri::command]
+fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Result<(), String> {
+    if plugin_id != CONTROL_MODULE_ID {
+        return Err("пакет этого микроприложения не установлен".to_owned());
+    }
+    let Some(state) = app.try_state::<ShortcutRuntime>() else {
+        return Err("служба сочетаний недоступна".to_owned());
+    };
+    let paused = state.paused.load(Ordering::SeqCst);
+    if enabled == !paused {
+        return Ok(());
+    }
+    toggle_shortcut_pause(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn change_control_shortcut(
+    app: AppHandle,
+    state: tauri::State<ShortcutRuntime>,
+    combo: String,
+) -> Result<String, String> {
+    let normalized = util_maker_core::hotkeys::Hotkey::parse(&combo)
+        .map_err(|error| error.to_string())?
+        .canonical();
+    let old = state.combo.lock().expect("сочетание").clone();
+    if normalized == old {
+        return Ok(old);
+    }
+    let service = state.service.lock().expect("служба сочетаний");
+    service.unregister(HOTKEY_ID);
+    match service.register(&normalized, HOTKEY_ID) {
+        Ok(()) => {
+            *state.combo.lock().expect("сочетание") = normalized.clone();
+            state.registered.store(true, Ordering::SeqCst);
+            state.paused.store(false, Ordering::SeqCst);
+            drop(service);
+            set_shortcut_status(&app, "зарегистрировано");
+            save_shortcut(&app, &normalized);
+            Ok(normalized)
+        }
+        Err(error) => {
+            let _ = service.register(&old, HOTKEY_ID);
+            drop(service);
+            set_shortcut_status(&app, "зарегистрировано");
+            Err(register_failure_message(error))
+        }
+    }
+}
+
+fn register_failure_message(error: RegisterFailure) -> String {
+    match error {
+        RegisterFailure::SystemReserved { function } => {
+            format!("сочетание зарезервировано Windows: {function}")
+        }
+        RegisterFailure::Occupied => "сочетание занято другой программой".to_owned(),
+        RegisterFailure::Unavailable(message) => {
+            format!("сочетание недоступно для глобального назначения: {message}")
+        }
+    }
+}
+
 #[tauri::command]
 fn get_status(app: AppHandle) -> Result<StatusPayload, String> {
     let directory = module_directory(&app)?;
@@ -718,7 +870,10 @@ fn get_status(app: AppHandle) -> Result<StatusPayload, String> {
         module_version: manifest.version.clone(),
         action_id: action.id.clone(),
         action_name: action.name.clone(),
-        shortcut: CONTROL_SHORTCUT.to_owned(),
+        shortcut: app
+            .try_state::<ShortcutRuntime>()
+            .and_then(|runtime| runtime.combo.lock().ok().map(|combo| combo.clone()))
+            .unwrap_or_else(|| CONTROL_SHORTCUT.to_owned()),
         shortcut_status: app
             .try_state::<ShortcutRuntime>()
             .and_then(|runtime| runtime.status.lock().ok().map(|status| status.clone()))
@@ -915,6 +1070,31 @@ fn terminate_module_processes() {
 struct PersistedState {
     #[serde(default)]
     first_run_done: bool,
+    #[serde(default)]
+    shortcut: Option<String>,
+}
+
+fn persisted_state(app: &AppHandle) -> PersistedState {
+    state_path(app)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn persisted_shortcut(app: &AppHandle) -> Option<String> {
+    persisted_state(app).shortcut
+}
+
+fn save_shortcut(app: &AppHandle, combo: &str) {
+    let Ok(path) = state_path(app) else {
+        return;
+    };
+    let mut state = persisted_state(app);
+    state.shortcut = Some(combo.to_owned());
+    if let Ok(text) = serde_json::to_string_pretty(&state) {
+        let _ = std::fs::write(path, text);
+    }
 }
 
 fn state_path(app: &AppHandle) -> Result<PathBuf, String> {

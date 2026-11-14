@@ -1,6 +1,6 @@
 # Обработать выделение до и после вызова переводчика
 
-**Статус** — На ревью
+**Статус** — 👁️ На ревью
 
 **Основание** — [ТЗ блока «Переводчик»](../../blocks/translator.md).
 
@@ -14,7 +14,7 @@
 
 ## Что сделано
 
-- `crates/translator` — `SelectionController` с фазами Idle/Awaiting/Manual и снимками источника `Selected`, `Empty`, `Unsupported`, `Password`, `ContextLost`.
+- `plugins/translator` — `SelectionController` с фазами Idle/Awaiting/Manual и снимками источника `Selected`, `Empty`, `Unsupported`, `Password`, `ContextLost`.
 - `SourceAdapter` и `TranslationSink` — тестовые адаптеры источника и перевода; `run_shortcut` проводит один вызов от шорткея до запроса.
 - Готовое выделение передаётся побайтно как есть, включая пробелы и переносы. Повторный жест после первого запроса игнорируется; Esc и смена приложения сбрасывают ожидание без запроса; парольное поле блокирует вызов; ручной текст хранится до явной команды.
 

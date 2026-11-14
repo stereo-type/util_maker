@@ -85,7 +85,9 @@
       footer { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
       kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; font-family: inherit; font-size: 12px; }
       .check { display: flex; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
-      .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+      .check input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+      .hotkey-input { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; box-sizing: border-box; }
+      .hotkey-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
       .hint { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
     </style>
   </head>
@@ -124,13 +126,13 @@
       <section class="card" aria-labelledby="hotkeys-title">
         <h2 class="module-name" id="hotkeys-title" style="margin-bottom: 8px">Шорткеи</h2>
         <p class="hint" style="margin-top: 0">
-          Демонстрационный реестр. Показаны оба владельца, системные сочетания блокируются до регистрации.
+          Демонстрационный реестр действий. Полноценный список установленных микроприложений с их страницами — отдельная задача; привязки уже хранятся по паре moduleId + actionId.
         </p>
         <div id="hotkey-list"></div>
         <div id="hotkey-editor" hidden>
           <label class="check" style="margin-top: 12px">
             <span>Сочетание</span>
-            <input id="hotkey-input" type="text" autocomplete="off" spellcheck="false" style="flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit;" />
+            <input id="hotkey-input" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" placeholder="Например, Ctrl+Shift+3" />
           </label>
           <div class="actions" style="margin-top: 10px">
             <button id="hotkey-check" type="button">Проверить</button>
@@ -349,7 +351,11 @@
       }
 
       function openHotkeyEditor(record) {
-        hotkeyTarget = { moduleId: record.moduleId, actionId: record.actionId };
+        hotkeyTarget = {
+          moduleId: record.moduleId,
+          actionId: record.actionId,
+          oldCombo: record.combo,
+        };
         hotkeyCheck = null;
         hotkeyEditor.hidden = false;
         hotkeyConflict.hidden = true;
@@ -421,6 +427,7 @@
             combo: hotkeyInput.value,
             moduleId: hotkeyTarget.moduleId,
             actionId: hotkeyTarget.actionId,
+            oldCombo: hotkeyTarget.oldCombo,
             confirmation: confirmation || null,
           });
           renderHotkeyRecords(records);

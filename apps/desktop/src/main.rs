@@ -832,6 +832,7 @@ fn assign_hotkey(
     combo: String,
     module_id: String,
     action_id: String,
+    old_combo: Option<String>,
     confirmation: Option<HotkeyConfirmationDto>,
 ) -> Result<Vec<HotkeyStateDto>, String> {
     let candidate = candidate_for(&combo, &module_id, &action_id);
@@ -848,6 +849,21 @@ fn assign_hotkey(
     registry
         .assign(&candidate, confirmation.as_ref())
         .map_err(|error| error.to_string())?;
+
+    // «Изменить» заменяет конкретную привязку, а не добавляет новую.
+    if let Some(old_combo) = old_combo {
+        let new_canonical = util_maker_core::hotkeys::Hotkey::parse(&combo)
+            .map(|hotkey| hotkey.canonical())
+            .unwrap_or_else(|_| combo.clone());
+        let old_canonical = util_maker_core::hotkeys::Hotkey::parse(&old_combo)
+            .map(|hotkey| hotkey.canonical())
+            .unwrap_or(old_combo.clone());
+        if !old_combo.is_empty() && old_canonical != new_canonical {
+            registry
+                .unassign(&module_id, &action_id, &old_combo)
+                .map_err(|error| error.to_string())?;
+        }
+    }
     drop(registry);
     Ok(hotkey_state(&state))
 }

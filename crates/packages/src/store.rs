@@ -127,6 +127,37 @@ impl PackageStore {
         Ok(next)
     }
 
+    /// Удаляет активную версию и её историю; повторный вызов безопасен.
+    pub fn remove(&mut self, id: &str) -> Result<bool, PackageError> {
+        let Some(active) = self.state.modules.remove(id) else {
+            self.state.previous.remove(id);
+            self.state.settings.remove(id);
+            self.state.previous_settings.remove(id);
+            return Ok(false);
+        };
+        let previous = self.state.previous.remove(id);
+        let settings = self.state.settings.remove(id);
+        let previous_settings = self.state.previous_settings.remove(id);
+        if let Err(error) = self.write_state() {
+            self.state.modules.insert(id.to_owned(), active);
+            if let Some(previous) = previous {
+                self.state.previous.insert(id.to_owned(), previous);
+            }
+            if let Some(settings) = settings {
+                self.state.settings.insert(id.to_owned(), settings);
+            }
+            if let Some(settings) = previous_settings {
+                self.state.previous_settings.insert(id.to_owned(), settings);
+            }
+            return Err(error);
+        }
+        let directory = self.root.join("modules").join(id);
+        if directory.exists() {
+            fs::remove_dir_all(directory).map_err(PackageError::Io)?;
+        }
+        Ok(true)
+    }
+
     /// Возвращает предыдущую версию и её метаданные.
     pub fn rollback(&mut self, id: &str) -> Result<InstalledModule, PackageError> {
         let previous =
@@ -416,6 +447,25 @@ mod tests {
             reopened.module("com.example.rollback").unwrap().version,
             "0.1.0"
         );
+    }
+
+    #[test]
+    fn remove_is_idempotent_and_clears_settings() {
+        let (package_path, trust, root) = package("com.example.remove", "com.example", "0.1.0", 9);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&package_path, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .save_settings("com.example.remove", serde_json::json!({"x": 1}))
+            .unwrap();
+        assert!(store.remove("com.example.remove").unwrap());
+        assert!(store.module("com.example.remove").is_none());
+        assert!(store.settings("com.example.remove").is_none());
+        assert!(!store.remove("com.example.remove").unwrap());
+        let reopened = PackageStore::open(&profile).unwrap();
+        assert!(reopened.modules().is_empty());
     }
 
     #[test]

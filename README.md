@@ -68,6 +68,7 @@ plugins/<plugin-id>/
 ```sh
 make dev-setup          # подготовить Linux-контейнер
 make check              # версия, rustfmt, clippy, тесты
+make example-package    # подписанный пример стороннего плагина в dist/
 make build-windows      # NSIS-установщик в dist/
 make version            # версия и тип сборки
 ```

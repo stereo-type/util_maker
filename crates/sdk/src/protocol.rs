@@ -3,10 +3,13 @@
 //! Один объект UTF-8 на строку, предел [`MAX_MESSAGE_BYTES`] на сообщение.
 //! Служебная диагностика идёт в stderr и не является частью протокола.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::manifest::SecretPresence;
 
 /// Версия API хоста, которую реализует первая поставка.
 pub const HOST_API_VERSION: &str = "1.0.0";
@@ -31,6 +34,9 @@ pub mod error_codes {
     pub const CANCELLED: i64 = 1002;
     pub const CAPABILITY_DENIED: i64 = 1003;
     pub const HOST_API_INCOMPATIBLE: i64 = 1004;
+    pub const CONTEXT_LOST: i64 = 1005;
+    pub const FIELD_INVALID: i64 = 1006;
+    pub const BUFFER_EXPIRED: i64 = 1007;
 }
 
 /// Запрос от хоста к модулю или от модуля к хосту.
@@ -181,6 +187,44 @@ pub enum InvokeStatus {
     Cancelled,
 }
 
+/// Запрос команды формы настроек. Хост передаёт значения только тех полей,
+/// которые перечислены в манифесте; секреты заменяются ссылками хранилища.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FormCommandRequest {
+    pub command_id: String,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub values: BTreeMap<String, Value>,
+    /// Поле секрета и признак наличия сохранённого значения. Сам секрет
+    /// передаётся только через возможность хоста `secret.read`.
+    #[serde(default)]
+    pub secrets: BTreeMap<String, SecretPresence>,
+}
+
+/// Результат команды формы. Ошибки привязываются к конкретным полям, чтобы
+/// оболочка показала их рядом с вводом.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FormCommandResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    #[serde(default)]
+    pub field_errors: Vec<FormFieldError>,
+}
+
+/// Ошибка одного поля формы.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FormFieldError {
+    pub field_id: String,
+    pub code: String,
+    pub message: String,
+}
+
 /// Результат успешного или отменённого вызова.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -252,5 +296,36 @@ mod tests {
             "Действие отменено"
         );
         assert_eq!(InvokeResult::ok("готово").message_or_default(), "готово");
+    }
+    #[test]
+    fn form_command_round_trip() {
+        let request = FormCommandRequest {
+            command_id: "testConnection".to_owned(),
+            profile: Some("yandex".to_owned()),
+            values: BTreeMap::from([("sourceLang".to_owned(), json!("en"))]),
+            secrets: BTreeMap::from([(
+                "apiKey".to_owned(),
+                SecretPresence {
+                    secret_ref: "translator/yandex/apiKey".to_owned(),
+                    present: true,
+                },
+            )]),
+        };
+        let line = serde_json::to_string(&request).unwrap();
+        let parsed: FormCommandRequest = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed.command_id, "testConnection");
+        assert_eq!(parsed.profile.as_deref(), Some("yandex"));
+
+        let result = FormCommandResult {
+            message: None,
+            data: None,
+            field_errors: vec![FormFieldError {
+                field_id: "apiKey".to_owned(),
+                code: "required".to_owned(),
+                message: "Укажите ключ".to_owned(),
+            }],
+        };
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["fieldErrors"][0]["fieldId"], "apiKey");
     }
 }

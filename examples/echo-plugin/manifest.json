@@ -1,0 +1,27 @@
+{
+  "manifestVersion": 1,
+  "id": "com.example.echo",
+  "publisher": "com.example",
+  "name": "Пример Echo",
+  "version": "0.1.0",
+  "hostApi": ">=1.0.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "echo-plugin.exe",
+    "linux-x64": "echo-plugin"
+  },
+  "capabilities": [],
+  "actions": [
+    {
+      "id": "hello",
+      "name": "Поздороваться",
+      "description": "Вернуть приветствие и идентификатор вызова",
+      "recommendedHotkeys": ["Ctrl+Alt+E"]
+    },
+    {
+      "id": "clock",
+      "name": "Показать время",
+      "description": "Вернуть текущее время процесса и PID",
+      "recommendedHotkeys": ["Ctrl+Alt+T"]
+    }
+  ]
+}

@@ -17,9 +17,9 @@ fn main() {
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     let mut first_initialize = true;
+    let mut lines = stdin.lock().lines();
 
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
+    while let Some(Ok(line)) = lines.next() {
         if line.trim().is_empty() {
             continue;
         }
@@ -100,6 +100,56 @@ fn main() {
                     .and_then(|params| params.get("callId"))
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                if mode == "host-call" || mode == "host-context" {
+                    let requested_call = if mode == "host-context" {
+                        "stale-call"
+                    } else {
+                        call_id
+                    };
+                    write_response(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 9001,
+                            "method": "host.call",
+                            "params": {
+                                "callId": requested_call,
+                                "capability": "screen.frame",
+                                "method": "frame.capture",
+                                "params": {}
+                            }
+                        }),
+                    );
+                    let Some(Ok(host_line)) = lines.next() else {
+                        return;
+                    };
+                    let host_response: Value =
+                        serde_json::from_str(&host_line).unwrap_or(Value::Null);
+                    if let Some(error) = host_response.get("error") {
+                        write_response(
+                            &mut stdout,
+                            json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": error
+                            }),
+                        );
+                    } else {
+                        write_response(
+                            &mut stdout,
+                            json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "status": "ok",
+                                    "message": "fixture-module: кадр получен",
+                                    "data": host_response.get("result").cloned().unwrap_or(Value::Null)
+                                }
+                            }),
+                        );
+                    }
+                    continue;
+                }
                 write_response(
                     &mut stdout,
                     json!({

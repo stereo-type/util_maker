@@ -384,6 +384,7 @@ mod tests {
                 description: None,
                 recommended_hotkeys: Vec::new(),
             }],
+            settings: None,
             files: Vec::new(),
         }
     }

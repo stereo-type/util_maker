@@ -15,8 +15,9 @@ use std::time::{Duration, Instant};
 use semver::Version;
 use serde_json::{json, Value};
 use util_maker_sdk::{
-    error_codes, CallContext, InitializeParams, InitializeResult, InvocationSource, InvokeRequest,
-    InvokeResult, HOST_API_VERSION, INITIALIZE_TIMEOUT, JSONRPC_VERSION, MAX_MESSAGE_BYTES,
+    error_codes, CallContext, DeniedHost, HostCall, HostCallContext, HostHandler, InitializeParams,
+    InitializeResult, InvocationSource, InvokeRequest, InvokeResult, RpcError, RpcResponse,
+    HOST_API_VERSION, HOST_CALL_METHOD, INITIALIZE_TIMEOUT, JSONRPC_VERSION, MAX_MESSAGE_BYTES,
     SHUTDOWN_TIMEOUT,
 };
 
@@ -40,6 +41,7 @@ pub struct ModuleProcess {
     stderr_reader: Option<JoinHandle<()>>,
     logger: Logger,
     next_id: u64,
+    module_id: Option<String>,
 }
 
 impl ModuleProcess {
@@ -123,6 +125,7 @@ impl ModuleProcess {
             stderr_reader: Some(stderr_reader),
             logger,
             next_id: 0,
+            module_id: None,
         })
     }
 
@@ -138,10 +141,20 @@ impl ModuleProcess {
 
     /// Согласует версию API и возможности. Ожидание ограничено 3 секундами.
     pub fn initialize(&mut self, module_id: &str) -> Result<InitializeResult, CoreError> {
+        self.initialize_with_capabilities(module_id, &[])
+    }
+
+    /// Согласует API и передаёт модулю объявленные в манифесте возможности.
+    pub fn initialize_with_capabilities(
+        &mut self,
+        module_id: &str,
+        capabilities: &[String],
+    ) -> Result<InitializeResult, CoreError> {
+        self.module_id = Some(module_id.to_owned());
         let params = InitializeParams {
             host_api: HOST_API_VERSION.to_owned(),
             module_id: module_id.to_owned(),
-            capabilities: Vec::new(),
+            capabilities: capabilities.to_vec(),
         };
         let result = match self.request(
             "initialize",
@@ -190,7 +203,39 @@ impl ModuleProcess {
         timeout: Duration,
     ) -> Result<InvokeResult, CoreError> {
         let never = AtomicBool::new(false);
-        self.invoke_cancellable(call_id, action_id, source, timeout, &never)
+        let mut host = DeniedHost;
+        self.invoke_cancellable_with_host(
+            call_id,
+            action_id,
+            source,
+            timeout,
+            &never,
+            &mut host,
+            &[],
+        )
+    }
+
+    /// Передаёт действие, прерывает ожидание по флагу и обслуживает запросы
+    /// модуля к возможностям хоста.
+    pub fn invoke_with_host(
+        &mut self,
+        call_id: &str,
+        action_id: &str,
+        source: InvocationSource,
+        timeout: Duration,
+        host: &mut dyn HostHandler,
+        capabilities: &[String],
+    ) -> Result<InvokeResult, CoreError> {
+        let never = AtomicBool::new(false);
+        self.invoke_cancellable_with_host(
+            call_id,
+            action_id,
+            source,
+            timeout,
+            &never,
+            host,
+            capabilities,
+        )
     }
 
     /// Передаёт действие и прерывает ожидание, когда поднят флаг отмены.
@@ -205,6 +250,30 @@ impl ModuleProcess {
         timeout: Duration,
         cancel: &AtomicBool,
     ) -> Result<InvokeResult, CoreError> {
+        let mut host = DeniedHost;
+        self.invoke_cancellable_with_host(
+            call_id,
+            action_id,
+            source,
+            timeout,
+            cancel,
+            &mut host,
+            &[],
+        )
+    }
+
+    /// Вариант [`ModuleProcess::invoke_cancellable`] с обработчиком хоста.
+    #[allow(clippy::too_many_arguments)]
+    pub fn invoke_cancellable_with_host(
+        &mut self,
+        call_id: &str,
+        action_id: &str,
+        source: InvocationSource,
+        timeout: Duration,
+        cancel: &AtomicBool,
+        host: &mut dyn HostHandler,
+        capabilities: &[String],
+    ) -> Result<InvokeResult, CoreError> {
         let params = InvokeRequest {
             call_id: call_id.to_owned(),
             action_id: action_id.to_owned(),
@@ -217,7 +286,12 @@ impl ModuleProcess {
             "method": "invoke",
             "params": serde_json::to_value(params)?,
         }))?;
-        let result = match self.wait_result(id, "invoke", timeout, Some(cancel)) {
+        let context = HostCallContext::new(
+            self.module_id.clone().unwrap_or_default(),
+            call_id,
+            capabilities.to_vec(),
+        );
+        let result = match self.wait_result(id, "invoke", timeout, Some(cancel), host, &context) {
             Ok(result) => result,
             Err(CoreError::Cancelled { .. }) => {
                 self.cancel_and_stop(call_id);
@@ -233,14 +307,7 @@ impl ModuleProcess {
 
     /// Просит модуль отменить активный вызов.
     pub fn cancel(&mut self, call_id: &str) -> Result<(), CoreError> {
-        let id = self.next_id();
-        self.send_value(&json!({
-            "jsonrpc": JSONRPC_VERSION,
-            "id": id,
-            "method": "cancel",
-            "params": {"callId": call_id},
-        }))?;
-        self.wait_result(id, "cancel", Duration::from_secs(1), None)
+        self.request("cancel", json!({"callId": call_id}), Duration::from_secs(1))
             .map(|_| ())
     }
 
@@ -284,7 +351,13 @@ impl ModuleProcess {
             "method": method,
             "params": params,
         }))?;
-        self.wait_result(id, method, timeout, None)
+        let mut host = DeniedHost;
+        let context = HostCallContext::new(
+            self.module_id.clone().unwrap_or_default(),
+            String::new(),
+            Vec::new(),
+        );
+        self.wait_result(id, method, timeout, None, &mut host, &context)
     }
 
     fn wait_result(
@@ -293,6 +366,8 @@ impl ModuleProcess {
         method: &str,
         timeout: Duration,
         cancel: Option<&AtomicBool>,
+        host: &mut dyn HostHandler,
+        context: &HostCallContext,
     ) -> Result<Value, CoreError> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -322,6 +397,10 @@ impl ModuleProcess {
                     let value: Value = serde_json::from_str(&line).map_err(|error| {
                         CoreError::Protocol(format!("некорректный JSON от модуля: {error}"))
                     })?;
+                    if value.get("method").is_some() {
+                        self.handle_host_request(&value, host, context)?;
+                        continue;
+                    }
                     if !has_id(&value, expected_id) {
                         (self.logger)(&format!(
                             "[ipc] пропущено сообщение без ожидаемого id {expected_id}: {}",
@@ -359,6 +438,75 @@ impl ModuleProcess {
                 }
             }
         }
+    }
+
+    /// Обслуживает запрос модуля к хосту и возвращает ровно один ответ.
+    fn handle_host_request(
+        &mut self,
+        value: &Value,
+        host: &mut dyn HostHandler,
+        context: &HostCallContext,
+    ) -> Result<(), CoreError> {
+        let id = value.get("id").cloned().unwrap_or(Value::Null);
+        if value.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
+            let response = RpcResponse::error(
+                id,
+                RpcError::new(error_codes::INVALID_REQUEST, "ожидается JSON-RPC 2.0"),
+            );
+            return self.send_value(&serde_json::to_value(response)?);
+        }
+        let method = value
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if method != HOST_CALL_METHOD {
+            let response = RpcResponse::error(
+                id,
+                RpcError::new(
+                    error_codes::METHOD_NOT_FOUND,
+                    format!("неизвестный метод обращения к хосту: {method}"),
+                ),
+            );
+            return self.send_value(&serde_json::to_value(response)?);
+        }
+        let call: HostCall =
+            match serde_json::from_value(value.get("params").cloned().unwrap_or(Value::Null)) {
+                Ok(call) => call,
+                Err(error) => {
+                    let response = RpcResponse::error(
+                        id,
+                        RpcError::new(
+                            error_codes::INVALID_PARAMS,
+                            format!("параметры host.call: {error}"),
+                        ),
+                    );
+                    return self.send_value(&serde_json::to_value(response)?);
+                }
+            };
+        let outcome = if call.call_id != context.call_id {
+            Err(RpcError::new(
+                error_codes::CONTEXT_LOST,
+                format!(
+                    "запрос относится к вызову {}, активен {}",
+                    call.call_id, context.call_id
+                ),
+            ))
+        } else if call.capability.trim().is_empty() || !context.allows(&call.capability) {
+            Err(RpcError::new(
+                error_codes::CAPABILITY_DENIED,
+                format!(
+                    "модуль {} не объявил возможность {}",
+                    context.module_id, call.capability
+                ),
+            ))
+        } else {
+            host.handle(context, &call)
+        };
+        let response = match outcome {
+            Ok(result) => RpcResponse::ok(id, result),
+            Err(error) => RpcResponse::error(id, error),
+        };
+        self.send_value(&serde_json::to_value(response)?)
     }
 
     /// Отправляет `cancel`, даёт процессу короткую паузу и завершает его.

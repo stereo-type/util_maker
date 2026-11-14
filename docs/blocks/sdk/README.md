@@ -20,10 +20,186 @@
 
 Разрешения протокола регулируют доступ через SDK. Нативный процесс работает с правами пользователя, поэтому модель доверия опирается на подпись издателя. Любой язык реализации может использовать описанный протокол.
 
+## Пользовательские настройки
+
+Необязательное поле `settings` описывает форму целиком, поэтому оболочка
+строит её без запуска процесса. Схема поддерживает обычные и секретные поля,
+значения по умолчанию, варианты выбора, профили и команды формы. Старые
+манифесты без `settings` читаются без изменений.
+
+```json
+"settings": {
+  "schemaVersion": 1,
+  "profileField": "activeProfile",
+  "fields": [
+    {
+      "id": "activeProfile",
+      "label": "Активный профиль",
+      "type": "select",
+      "default": "yandex",
+      "options": [
+        { "value": "yandex", "label": "Яндекс" },
+        { "value": "google", "label": "Google" }
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "yandex",
+      "name": "Яндекс",
+      "fields": [
+        {
+          "id": "sourceLang",
+          "label": "Исходный язык",
+          "type": "select",
+          "default": "auto",
+          "options": [
+            { "value": "auto", "label": "Авто" },
+            { "value": "en", "label": "Английский" },
+            { "value": "ru", "label": "Русский" }
+          ]
+        },
+        {
+          "id": "targetLang",
+          "label": "Целевой язык",
+          "type": "select",
+          "default": "ru",
+          "options": [
+            { "value": "en", "label": "Английский" },
+            { "value": "ru", "label": "Русский" }
+          ]
+        },
+        {
+          "id": "apiKey",
+          "label": "API-ключ",
+          "type": "secret",
+          "required": true,
+          "secretRef": "translator/yandex/apiKey"
+        }
+      ]
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "fields": [
+        {
+          "id": "sourceLang",
+          "label": "Исходный язык",
+          "type": "select",
+          "default": "auto",
+          "options": [
+            { "value": "auto", "label": "Авто" },
+            { "value": "en", "label": "Английский" },
+            { "value": "ru", "label": "Русский" }
+          ]
+        },
+        {
+          "id": "targetLang",
+          "label": "Целевой язык",
+          "type": "select",
+          "default": "ru",
+          "options": [
+            { "value": "en", "label": "Английский" },
+            { "value": "ru", "label": "Русский" }
+          ]
+        },
+        {
+          "id": "apiKey",
+          "label": "API-ключ",
+          "type": "secret",
+          "required": true,
+          "secretRef": "translator/google/apiKey"
+        }
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "testConnection",
+      "name": "Проверить подключение",
+      "profileField": "activeProfile",
+      "fields": ["sourceLang", "targetLang", "apiKey"]
+    }
+  ]
+}
+```
+
+Типы полей: `text`, `number`, `boolean`, `select`, `secret`. Секретное поле
+обязано иметь `secretRef` и не может иметь `default`; само значение хранится
+только в системном хранилище. `profileField` ссылается на поле `select`, чьи
+варианты совпадают с ID профилей. Команда со ссылкой на профиль обязана
+указывать поля, существующие в каждом профиле; неизвестное поле, профиль или
+команда отклоняются при `Manifest::validate`.
+
+Публичное состояние формы содержит значения обычных полей и признаки наличия
+секретов:
+
+```json
+{
+  "activeProfile": "yandex",
+  "values": { "sourceLang": "en", "targetLang": "ru" },
+  "secrets": {
+    "apiKey": { "secretRef": "translator/yandex/apiKey", "present": true }
+  }
+}
+```
+
+Команда формы вызывается методом `command`:
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"command",
+ "params":{"commandId":"testConnection","profile":"yandex",
+           "values":{"sourceLang":"en","targetLang":"ru"},
+           "secrets":{"apiKey":{"secretRef":"translator/yandex/apiKey","present":true}}}}
+```
+
+Результат содержит сообщение, необязательные данные и ошибки конкретных полей.
+Значение секрета не возвращается; при отсутствии ключа оболочка получает
+`fieldErrors: [{"fieldId":"apiKey","code":"required","message":"..."}]`.
+
+## Возможности хоста во время invoke
+
+Во время активного вызова модуль может отправить по тому же stdout JSON-RPC
+запрос `host.call`:
+
+```json
+{"jsonrpc":"2.0","id":41,"method":"host.call",
+ "params":{"callId":"call-7","capability":"screen.frame",
+           "method":"frame.capture","params":{"monitor":"primary"}}}
+```
+
+Хост сверяет `callId` с живым вызовом и `capability` с манифестом. Возможность
+без объявления, чужой или завершённый контекст получают машинные коды
+`CAPABILITY_DENIED` (1003), `CONTEXT_LOST` (1005) и `CANCELLED` (1002). Адаптер
+платформы остаётся внутри хоста: в JSON нет Win32-дескрипторов и адресов.
+
+Кадр передаётся ссылкой, а не пикселями:
+
+```json
+{
+  "bufferId": "frame-42",
+  "format": "bgra8",
+  "width": 1920,
+  "height": 1080,
+  "stride": 7680,
+  "origin": { "x": 0, "y": 0 },
+  "scaleFactor": 1.0,
+  "expiresInMs": 5000
+}
+```
+
+Ссылка действует до истечения `expiresInMs` или завершения вызова, смотря что
+наступит раньше; просроченная ссылка возвращает `BUFFER_EXPIRED` (1007).
+Операции `frame.capture`, `frame.release`, `selection.get`, `buffer.copy`,
+`settings.read` и `secret.read` используют один конверт. Пока обработчик ждёт
+ответ хоста, SDK принимает `cancel` и `shutdown`, поэтому отмена не теряется.
+Модуль без `invoke_with_host` продолжает работать по протоколу v1: например,
+`control/ping` не меняет манифест и ответ.
+
 ## Критерии приёмки
 
 - Передать спецификацию форматов, пример модуля с двумя действиями, инструкцию по сборке и подписи. По ним собрать модуль под новым ID, установить через UI, назначить и вызвать оба действия, поставить следующую версию на тот же хост.
 - Автоматически проверить совместимое расширение необязательным полем, отказ для несовместимой major-версии, таймаут инициализации, отмену и поздний ответ. Неверное сообщение или превышение предела завершают конкретный вызов с ошибкой.
 - Проверить отказ при обращении через SDK к незапрошенной возможности или к завершённому контексту. Передача полноразмерного кадра укладывается в предел IPC-сообщения за счёт ссылки на буфер.
 
-[Исходники](../../../crates/sdk/) · [Очередь задач](../../tasks/blocks/sdk/README.md)
+[Исходники](../../../crates/sdk/) · [Пример стороннего плагина](../../../examples/echo-plugin/README.md) · [Очередь задач](../../tasks/blocks/sdk/README.md)

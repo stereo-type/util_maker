@@ -11,6 +11,7 @@ members = [
     "plugins/translator",
     "plugins/translator/providers",
     "apps/desktop",
+    "examples/echo-plugin",
 ]
 
 [workspace.package]

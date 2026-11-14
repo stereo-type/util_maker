@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use semver::Version;
 use serde_json::Value;
 use util_maker_sdk::{
-    error_codes, Action, InvocationSource, InvokeStatus, Manifest, HOST_API_VERSION,
+    error_codes, Action, DeniedHost, HostHandler, InvocationSource, InvokeStatus, Manifest,
+    HOST_API_VERSION,
 };
 
 use crate::error::CoreError;
@@ -114,6 +115,19 @@ impl Registry {
         timeout: Duration,
         logger: Option<Logger>,
     ) -> Result<InvokeOutcome, CoreError> {
+        let mut host = DeniedHost;
+        self.invoke_with_host(target, source, timeout, logger, &mut host)
+    }
+
+    /// Запускает модуль и обслуживает его обращения к возможностям хоста.
+    pub fn invoke_with_host(
+        &self,
+        target: &ActionRef,
+        source: InvocationSource,
+        timeout: Duration,
+        logger: Option<Logger>,
+        host: &mut dyn HostHandler,
+    ) -> Result<InvokeOutcome, CoreError> {
         let (entry, action) = self.action(target).ok_or_else(|| {
             CoreError::ActionNotFound(format!("{}.{}", target.module_id, target.action_id))
         })?;
@@ -123,7 +137,8 @@ impl Registry {
             Some(logger) => ModuleProcess::spawn_with_logger(&entry.executable, logger)?,
             None => ModuleProcess::spawn(&entry.executable)?,
         };
-        let initialized = process.initialize(&entry.manifest.id)?;
+        let initialized = process
+            .initialize_with_capabilities(&entry.manifest.id, &entry.manifest.capabilities)?;
         if initialized.module_id != entry.manifest.id {
             process.shutdown();
             return Err(CoreError::Protocol(format!(
@@ -133,7 +148,14 @@ impl Registry {
         }
         let pid = process.pid();
         let call_id = make_call_id();
-        let result = process.invoke(&call_id, &action.id, source, timeout);
+        let result = process.invoke_with_host(
+            &call_id,
+            &action.id,
+            source,
+            timeout,
+            host,
+            &entry.manifest.capabilities,
+        );
         process.shutdown();
         let result = result?;
         let elapsed = started.elapsed();

@@ -1,0 +1,15 @@
+[package]
+name = "util-maker-example-echo"
+version = "0.1.0"
+edition = "2021"
+license = "proprietary"
+publish = false
+description = "Пример стороннего микроприложения с двумя действиями"
+
+[[bin]]
+name = "echo-plugin"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1.0"
+util-maker-sdk = { path = "../../crates/sdk" }

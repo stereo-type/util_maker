@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 util-maker-core.workspace = true
 util-maker-sdk.workspace = true
+util-maker-platform.workspace = true

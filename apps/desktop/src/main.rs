@@ -10,6 +10,8 @@
 mod logging;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -20,8 +22,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri_plugin_global_shortcut::ShortcutState;
 use util_maker_core::{ActionRef, InvokeOutcome, Registry};
+use util_maker_platform::{HotkeyService, RegisterFailure};
 use util_maker_sdk::{protocol::InvocationSource, Manifest};
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
@@ -30,10 +32,43 @@ const CONTROL_SHORTCUT: &str = "Ctrl+Shift+U";
 const SETTINGS_WINDOW: &str = "settings";
 const RESULT_WINDOW: &str = "result";
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
+const HOTKEY_ID: u32 = 1;
 
 #[derive(Default)]
 struct AppState {
     last_result: Mutex<Option<LastResult>>,
+}
+
+/// Регистрация прототипа: одно сочетание, пауза и повторная попытка.
+struct ShortcutRuntime {
+    service: Mutex<HotkeyService>,
+    paused: AtomicBool,
+    registered: AtomicBool,
+    status: Mutex<String>,
+}
+
+impl ShortcutRuntime {
+    fn start() -> Result<Self, String> {
+        let service = HotkeyService::start()?;
+        let (registered, status) = register_shortcut(&service);
+        Ok(Self {
+            service: Mutex::new(service),
+            paused: AtomicBool::new(false),
+            registered: AtomicBool::new(registered),
+            status: Mutex::new(status),
+        })
+    }
+}
+
+fn register_shortcut(service: &HotkeyService) -> (bool, String) {
+    match service.register(CONTROL_SHORTCUT, HOTKEY_ID) {
+        Ok(()) => (true, "зарегистрировано".to_owned()),
+        Err(RegisterFailure::SystemReserved { function }) => {
+            (false, format!("недоступно: {function}"))
+        }
+        Err(RegisterFailure::Occupied) => (false, "занято другой программой".to_owned()),
+        Err(RegisterFailure::Unavailable(error)) => (false, format!("ошибка: {error}")),
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,6 +91,7 @@ struct StatusPayload {
     action_id: String,
     action_name: String,
     shortcut: String,
+    shortcut_status: String,
     module_path: String,
     log_path: String,
     config_path: String,
@@ -69,18 +105,6 @@ fn main() {
             logging::write("повторный запуск: показываю настройки существующего экземпляра");
             open_settings(app);
         }))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcut(CONTROL_SHORTCUT)
-                .expect("сочетание Ctrl+Shift+U должно разбираться")
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        logging::write("событие глобального сочетания");
-                        invoke_and_show(app, InvocationSource::Hotkey);
-                    }
-                })
-                .build(),
-        )
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -93,6 +117,11 @@ fn main() {
         ])
         .setup(|app| {
             setup_tray(app)?;
+            let runtime = ShortcutRuntime::start()?;
+            let status = runtime.status.lock().expect("статус сочетания").clone();
+            app.manage(runtime);
+            set_shortcut_status(app.handle(), &status);
+            spawn_hotkey_listener(app.handle().clone());
             let first_run = mark_and_check_first_run(app.handle())?;
             if first_run {
                 logging::write("первый запуск: открываю настройки");
@@ -122,9 +151,35 @@ fn main() {
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let settings = MenuItem::with_id(app, "settings", "Настройки", true, None::<&str>)?;
     let invoke = MenuItem::with_id(app, "invoke", "Проверить связь", true, None::<&str>)?;
+    let pause = MenuItem::with_id(
+        app,
+        "pause",
+        "Пауза / возобновить сочетание",
+        true,
+        None::<&str>,
+    )?;
+    let retry = MenuItem::with_id(
+        app,
+        "retry",
+        "Перерегистрировать сочетание",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&settings, &invoke, &separator, &quit])?;
+    let second_separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &settings,
+            &invoke,
+            &separator,
+            &pause,
+            &retry,
+            &second_separator,
+            &quit,
+        ],
+    )?;
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
     TrayIconBuilder::with_id("main")
@@ -141,6 +196,8 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 logging::write("меню трея: проверка связи");
                 invoke_and_show(app, InvocationSource::Tray);
             }
+            "pause" => toggle_shortcut_pause(app),
+            "retry" => retry_shortcut(app),
             "quit" => quit_application(app),
             _ => {}
         })
@@ -246,6 +303,87 @@ fn invoke_and_show(app: &AppHandle, source: InvocationSource) {
     }
 }
 
+/// Слушает WM_HOTKEY из платформенного адаптера и вызывает действие.
+fn spawn_hotkey_listener(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        let event = {
+            let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+                break;
+            };
+            let service = runtime.service.lock().expect("служба сочетаний");
+            service.recv_timeout(Duration::from_millis(250))
+        };
+        match event {
+            Ok(event) if event.pressed => {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    invoke_and_show(&handle, InvocationSource::Hotkey);
+                });
+            }
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    });
+}
+
+fn set_shortcut_status(app: &AppHandle, status: &str) {
+    if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+        if let Ok(mut slot) = runtime.status.lock() {
+            *slot = status.to_owned();
+        }
+    }
+    logging::write(&format!("сочетание: {status}"));
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(format!("Util Maker — {status}")));
+    }
+}
+
+fn toggle_shortcut_pause(app: &AppHandle) {
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return;
+    };
+    if runtime.paused.load(Ordering::SeqCst) {
+        let (registered, status) = {
+            let service = runtime.service.lock().expect("служба сочетаний");
+            register_shortcut(&service)
+        };
+        runtime.registered.store(registered, Ordering::SeqCst);
+        if registered {
+            runtime.paused.store(false, Ordering::SeqCst);
+        }
+        set_shortcut_status(app, &status);
+    } else {
+        runtime
+            .service
+            .lock()
+            .expect("служба сочетаний")
+            .unregister(HOTKEY_ID);
+        runtime.registered.store(false, Ordering::SeqCst);
+        runtime.paused.store(true, Ordering::SeqCst);
+        set_shortcut_status(app, "на паузе");
+    }
+}
+
+fn retry_shortcut(app: &AppHandle) {
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return;
+    };
+    if runtime.registered.load(Ordering::SeqCst) {
+        set_shortcut_status(app, "уже зарегистрировано");
+        return;
+    }
+    let (registered, status) = {
+        let service = runtime.service.lock().expect("служба сочетаний");
+        register_shortcut(&service)
+    };
+    runtime.registered.store(registered, Ordering::SeqCst);
+    if registered {
+        runtime.paused.store(false, Ordering::SeqCst);
+    }
+    set_shortcut_status(app, &status);
+}
+
 fn run_control_action(app: &AppHandle, source: InvocationSource) -> Result<InvokeOutcome, String> {
     let directory = module_directory(app)?;
     let manifest_path = directory.join("manifest.json");
@@ -324,6 +462,10 @@ fn get_status(app: AppHandle) -> Result<StatusPayload, String> {
         action_id: action.id.clone(),
         action_name: action.name.clone(),
         shortcut: CONTROL_SHORTCUT.to_owned(),
+        shortcut_status: app
+            .try_state::<ShortcutRuntime>()
+            .and_then(|runtime| runtime.status.lock().ok().map(|status| status.clone()))
+            .unwrap_or_else(|| "неизвестно".to_owned()),
         module_path: directory.display().to_string(),
         log_path: logging::log_path(),
         config_path,
@@ -390,7 +532,14 @@ fn quit_app(app: AppHandle) {
 
 /// Завершает хост и не оставляет дочерних процессов модулей.
 fn quit_application(app: &AppHandle) {
-    logging::write("выход: завершаю дочерние процессы");
+    logging::write("выход: освобождаю сочетание и завершаю дочерние процессы");
+    if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+        runtime
+            .service
+            .lock()
+            .expect("служба сочетаний")
+            .unregister(HOTKEY_ID);
+    }
     terminate_module_processes();
     app.exit(0);
 }

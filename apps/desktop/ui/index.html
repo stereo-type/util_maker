@@ -105,6 +105,8 @@
           <dd id="action-name">—</dd>
           <dt>Сочетание</dt>
           <dd><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>U</kbd></dd>
+          <dt>Состояние сочетания</dt>
+          <dd id="shortcut-status">—</dd>
           <dt>Каталог модуля</dt>
           <dd><code id="module-path">—</code></dd>
         </dl>
@@ -141,6 +143,7 @@
         path: document.getElementById("module-path"),
         log: document.getElementById("log-path"),
         config: document.getElementById("config-path"),
+        shortcut: document.getElementById("shortcut-status"),
         result: document.getElementById("result"),
         run: document.getElementById("run"),
         close: document.getElementById("close"),
@@ -158,6 +161,7 @@
           document.getElementById("module-title").textContent = status.moduleName;
           elements.version.textContent = `${status.moduleVersion} (${status.moduleId})`;
           elements.action.textContent = status.actionName;
+          elements.shortcut.textContent = status.shortcutStatus;
           elements.path.textContent = status.modulePath;
           elements.log.textContent = status.logPath || "недоступен";
           elements.config.textContent = status.configPath || "недоступен";

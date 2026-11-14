@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/control-module",
     "crates/fixture-module",
+    "crates/platform",
     "apps/desktop",
 ]
 
@@ -17,6 +18,7 @@ rust-version = "1.90"
 [workspace.dependencies]
 util-maker-sdk = { path = "crates/sdk" }
 util-maker-core = { path = "crates/core" }
+util-maker-platform = { path = "crates/platform" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

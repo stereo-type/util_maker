@@ -6,6 +6,7 @@
 //! активируется только после успешной проверки.
 
 pub mod export;
+pub mod store;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -22,6 +23,7 @@ use zip::ZipArchive;
 pub use export::{
     ensure_key_is_outside_package, export_package, ExportError, ExportOptions, ExportResult,
 };
+pub use store::{InstalledModule, PackageStore};
 
 /// Имя манифеста внутри архива.
 pub const MANIFEST_ENTRY: &str = "manifest.json";
@@ -57,6 +59,10 @@ pub enum PackageError {
     IncompatibleApi(String),
     #[error("нарушение формата пакета: {0}")]
     Malformed(String),
+    #[error("модуль уже установлен другим издателем: {0}")]
+    PublisherConflict(String),
+    #[error("не удалось установить пакет: {0}")]
+    Install(String),
 }
 
 /// Доверенные открытые ключи издателей.

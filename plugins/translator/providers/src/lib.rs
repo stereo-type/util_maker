@@ -2,7 +2,7 @@
 //! Basic v2. Транспорт отделён трейтом, поэтому поля запроса, авторизация,
 //! разбор ответа и ошибки проверяются на тестовом HTTP-адаптере.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +14,14 @@ use serde_json::{json, Value};
 pub const PROBE_TEXT: &str = "Util Maker";
 /// Таймаут одного перевода.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Автоопределение исходного языка.
+pub const AUTO_SOURCE_LANGUAGE: &str = "auto";
+/// Целевой язык по умолчанию.
+pub const DEFAULT_TARGET_LANGUAGE: &str = "ru";
+/// Ссылка на секрет профиля Яндекса.
+pub const YANDEX_SECRET_REF: &str = "translator/yandex/apiKey";
+/// Ссылка на секрет профиля Google.
+pub const GOOGLE_SECRET_REF: &str = "translator/google/apiKey";
 
 /// Поддерживаемый сервис.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -29,39 +37,346 @@ impl ProviderKind {
             Self::Google => "Google",
         }
     }
+
+    /// Стабильный ID профиля в настройках.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Yandex => "yandex",
+            Self::Google => "google",
+        }
+    }
+
+    pub fn from_id(value: &str) -> Option<Self> {
+        match value {
+            "yandex" => Some(Self::Yandex),
+            "google" => Some(Self::Google),
+            _ => None,
+        }
+    }
+
+    /// Ссылка на запись системного хранилища с ключом этого профиля.
+    pub fn default_secret_ref(self) -> &'static str {
+        match self {
+            Self::Yandex => YANDEX_SECRET_REF,
+            Self::Google => GOOGLE_SECRET_REF,
+        }
+    }
+}
+
+/// Сохраняемая часть профиля: языки и ссылка на ключ. Сам ключ хранится
+/// отдельно и в настройках не появляется.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSettings {
+    pub id: String,
+    /// `None` — автоопределение исходного языка сервисом.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_language: Option<String>,
+    #[serde(default = "default_target_language")]
+    pub target_language: String,
+    #[serde(default)]
+    pub secret_ref: String,
+}
+
+fn default_target_language() -> String {
+    DEFAULT_TARGET_LANGUAGE.to_owned()
+}
+
+impl ProfileSettings {
+    pub fn yandex() -> Self {
+        Self {
+            id: ProviderKind::Yandex.id().to_owned(),
+            source_language: None,
+            target_language: DEFAULT_TARGET_LANGUAGE.to_owned(),
+            secret_ref: YANDEX_SECRET_REF.to_owned(),
+        }
+    }
+
+    pub fn google() -> Self {
+        Self {
+            id: ProviderKind::Google.id().to_owned(),
+            source_language: None,
+            target_language: DEFAULT_TARGET_LANGUAGE.to_owned(),
+            secret_ref: GOOGLE_SECRET_REF.to_owned(),
+        }
+    }
+
+    pub fn kind(&self) -> Result<ProviderKind, ProviderError> {
+        ProviderKind::from_id(&self.id).ok_or_else(|| {
+            ProviderError::InvalidSettings(format!("неизвестный профиль: {}", self.id))
+        })
+    }
+
+    /// Явный исходный язык; `None` означает автоопределение.
+    pub fn source(&self) -> Option<String> {
+        self.source_language
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(AUTO_SOURCE_LANGUAGE))
+            .map(str::to_owned)
+    }
+
+    pub fn effective_secret_ref(&self) -> Result<String, ProviderError> {
+        let kind = self.kind()?;
+        if self.secret_ref.trim().is_empty() {
+            Ok(kind.default_secret_ref().to_owned())
+        } else {
+            Ok(self.secret_ref.clone())
+        }
+    }
+
+    fn from_value(value: &Value, fallback_id: Option<&str>) -> Result<Self, ProviderError> {
+        let object = value.as_object().ok_or_else(|| {
+            ProviderError::InvalidSettings("профиль должен быть объектом".to_owned())
+        })?;
+        let id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .or(fallback_id)
+            .ok_or_else(|| ProviderError::InvalidSettings("у профиля нет id".to_owned()))?;
+        let kind = ProviderKind::from_id(id)
+            .ok_or_else(|| ProviderError::InvalidSettings(format!("неизвестный профиль: {id}")))?;
+        let source_language =
+            language_field(object, &["sourceLang", "sourceLanguage"]).unwrap_or(None);
+        let target_language = string_field(object, &["targetLang", "targetLanguage"])
+            .unwrap_or_else(|| DEFAULT_TARGET_LANGUAGE.to_owned());
+        let secret_ref = string_field(object, &["secretRef"])
+            .unwrap_or_else(|| kind.default_secret_ref().to_owned());
+        Ok(Self {
+            id: id.to_owned(),
+            source_language,
+            target_language,
+            secret_ref,
+        })
+    }
+}
+
+/// Настройки всех профилей и активный профиль.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<String>,
+    #[serde(default)]
+    pub profiles: Vec<ProfileSettings>,
+}
+
+impl ProviderSettings {
+    /// Оба профиля с автоопределением и целевым русским.
+    pub fn defaults() -> Self {
+        Self {
+            active_profile: Some(ProviderKind::Yandex.id().to_owned()),
+            profiles: vec![ProfileSettings::yandex(), ProfileSettings::google()],
+        }
+    }
+
+    /// Читает состояние формы: профили с языками и ссылками на ключи либо
+    /// плоские значения активного профиля.
+    pub fn from_value(value: &Value) -> Result<Self, ProviderError> {
+        if value.is_null() {
+            return Ok(Self::defaults());
+        }
+        let object = value.as_object().ok_or_else(|| {
+            ProviderError::InvalidSettings("настройки должны быть объектом".to_owned())
+        })?;
+        let active = string_field(object, &["activeProfile"]);
+        let mut profiles = Vec::new();
+        match object.get("profiles") {
+            None => {}
+            Some(Value::Array(items)) => {
+                for item in items {
+                    profiles.push(ProfileSettings::from_value(item, None)?);
+                }
+            }
+            Some(Value::Object(items)) => {
+                for (id, item) in items {
+                    profiles.push(ProfileSettings::from_value(item, Some(id))?);
+                }
+            }
+            Some(_) => {
+                return Err(ProviderError::InvalidSettings(
+                    "profiles должен быть массивом или объектом".to_owned(),
+                ))
+            }
+        }
+        if profiles.is_empty() {
+            profiles = Self::defaults().profiles;
+        }
+        let flat = object
+            .get("values")
+            .and_then(Value::as_object)
+            .unwrap_or(object);
+        let source = language_field(flat, &["sourceLang", "sourceLanguage"]);
+        let target = string_field(flat, &["targetLang", "targetLanguage"]);
+        let selected = active
+            .clone()
+            .unwrap_or_else(|| ProviderKind::Yandex.id().to_owned());
+        if let Some(profile) = profiles.iter_mut().find(|profile| profile.id == selected) {
+            if let Some(source) = source {
+                profile.source_language = source;
+            }
+            if let Some(target) = target {
+                profile.target_language = target;
+            }
+        }
+        let settings = Self {
+            active_profile: active,
+            profiles,
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    /// Проверяет уникальность профилей, языки и ссылки на секреты.
+    pub fn validate(&self) -> Result<(), ProviderError> {
+        let mut seen = BTreeSet::new();
+        for profile in &self.profiles {
+            let kind = profile.kind()?;
+            if !seen.insert(kind) {
+                return Err(ProviderError::InvalidSettings(format!(
+                    "профиль {} объявлен дважды",
+                    profile.id
+                )));
+            }
+            profile.effective_secret_ref()?;
+            if profile.target_language.trim().is_empty() {
+                return Err(ProviderError::InvalidSettings(format!(
+                    "у профиля {} не задан целевой язык",
+                    profile.id
+                )));
+            }
+        }
+        if let Some(active) = &self.active_profile {
+            let kind = ProviderKind::from_id(active).ok_or_else(|| {
+                ProviderError::InvalidSettings(format!("неизвестный активный профиль: {active}"))
+            })?;
+            if !seen.contains(&kind) {
+                return Err(ProviderError::InvalidSettings(format!(
+                    "активный профиль {active} не найден"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn active_kind(&self) -> Result<ProviderKind, ProviderError> {
+        let id = self
+            .active_profile
+            .as_deref()
+            .unwrap_or(ProviderKind::Yandex.id());
+        ProviderKind::from_id(id)
+            .ok_or_else(|| ProviderError::InvalidSettings(format!("неизвестный профиль: {id}")))
+    }
+
+    pub fn profile(&self, kind: ProviderKind) -> Option<&ProfileSettings> {
+        self.profiles.iter().find(|profile| profile.id == kind.id())
+    }
+}
+
+fn string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn language_field(
+    object: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<Option<String>> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(|value| {
+            let value = value.trim();
+            if value.is_empty() || value.eq_ignore_ascii_case(AUTO_SOURCE_LANGUAGE) {
+                None
+            } else {
+                Some(value.to_owned())
+            }
+        })
 }
 
 /// Профиль подключения. Ключ относится только к этому сервису.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Profile {
     pub kind: ProviderKind,
     pub api_key: String,
+    /// Ссылка на запись хранилища, из которой получен ключ.
+    pub secret_ref: String,
+    /// `None` — автоопределение исходного языка.
     pub source: Option<String>,
     pub target: String,
 }
 
 impl Profile {
-    pub fn yandex(api_key: impl Into<String>) -> Self {
+    fn new(kind: ProviderKind, api_key: impl Into<String>) -> Self {
         Self {
-            kind: ProviderKind::Yandex,
+            kind,
             api_key: api_key.into(),
+            secret_ref: kind.default_secret_ref().to_owned(),
             source: None,
-            target: "ru".to_owned(),
+            target: DEFAULT_TARGET_LANGUAGE.to_owned(),
         }
     }
 
+    pub fn yandex(api_key: impl Into<String>) -> Self {
+        Self::new(ProviderKind::Yandex, api_key)
+    }
+
     pub fn google(api_key: impl Into<String>) -> Self {
-        Self {
-            kind: ProviderKind::Google,
-            api_key: api_key.into(),
-            source: None,
-            target: "ru".to_owned(),
-        }
+        Self::new(ProviderKind::Google, api_key)
     }
 
     pub fn with_source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
         self
+    }
+
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = target.into();
+        self
+    }
+
+    pub fn from_settings(
+        settings: &ProfileSettings,
+        api_key: impl Into<String>,
+    ) -> Result<Self, ProviderError> {
+        let kind = settings.kind()?;
+        if settings.target_language.trim().is_empty() {
+            return Err(ProviderError::InvalidSettings(
+                "не задан целевой язык".to_owned(),
+            ));
+        }
+        Ok(Self {
+            kind,
+            api_key: api_key.into(),
+            secret_ref: settings.effective_secret_ref()?,
+            source: settings.source(),
+            target: settings.target_language.clone(),
+        })
+    }
+
+    pub fn has_key(&self) -> bool {
+        !self.api_key.trim().is_empty()
+    }
+
+    pub fn is_auto_source(&self) -> bool {
+        self.source.is_none()
+    }
+}
+
+/// Ключ не попадает в отладочный вывод и журнал.
+impl std::fmt::Debug for Profile {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Profile")
+            .field("kind", &self.kind)
+            .field("api_key", &"<скрыт>")
+            .field("secret_ref", &self.secret_ref)
+            .field("source", &self.source)
+            .field("target", &self.target)
+            .finish()
     }
 }
 
@@ -126,6 +441,10 @@ pub enum ProviderError {
     InvalidResponse(String),
     #[error("профиль {0} не настроен")]
     MissingProfile(&'static str),
+    #[error("текст перевода не передан")]
+    EmptyText,
+    #[error("настройки профилей некорректны: {0}")]
+    InvalidSettings(String),
 }
 
 /// Переводит текст активным профилем через заданный транспорт.
@@ -137,6 +456,9 @@ pub fn translate(
 ) -> Result<Translation, ProviderError> {
     if cancel.load(Ordering::SeqCst) {
         return Err(ProviderError::Cancelled);
+    }
+    if text.is_empty() {
+        return Err(ProviderError::EmptyText);
     }
     let request = build_request(profile, text, cancel)?;
     let response = transport.execute(&request).map_err(map_transport)?;
@@ -286,6 +608,48 @@ impl ProviderHub {
 
     pub fn active(&self) -> Option<ProviderKind> {
         self.active
+    }
+
+    /// Собирает профили из настроек. Ключ запрашивается по ссылке на секрет;
+    /// профиль без ключа остаётся в наборе, чтобы вызывающая сторона открыла
+    /// именно его страницу.
+    pub fn from_settings<F>(
+        settings: &ProviderSettings,
+        mut key_for: F,
+    ) -> Result<Self, ProviderError>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        settings.validate()?;
+        let mut hub = Self::default();
+        for config in &settings.profiles {
+            let secret_ref = config.effective_secret_ref()?;
+            let profile = Profile::from_settings(config, key_for(&secret_ref).unwrap_or_default())?;
+            let kind = profile.kind;
+            hub.profiles.insert(kind, profile);
+        }
+        let kind = settings.active_kind()?;
+        if !hub.profiles.contains_key(&kind) {
+            return Err(ProviderError::InvalidSettings(format!(
+                "активный профиль {} не найден",
+                kind.id()
+            )));
+        }
+        hub.active = Some(kind);
+        Ok(hub)
+    }
+
+    pub fn profile(&self, kind: ProviderKind) -> Option<&Profile> {
+        self.profiles.get(&kind)
+    }
+
+    pub fn active_profile(&self) -> Option<&Profile> {
+        self.active.and_then(|kind| self.profiles.get(&kind))
+    }
+
+    /// Активный профиль без ключа: запрос не отправляется.
+    pub fn missing_key_profile(&self) -> Option<&Profile> {
+        self.active_profile().filter(|profile| !profile.has_key())
     }
 
     pub fn translate(

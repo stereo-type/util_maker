@@ -272,13 +272,17 @@ mod tests {
         assert!(manifest.action("ping").is_some());
         assert_eq!(
             manifest.resolved_entrypoint("windows-x64").unwrap(),
-            PathBuf::from("bin/control-module.exe")
+            PathBuf::from("control-module.exe")
         );
     }
 
     #[test]
     fn rejects_parent_directory_entrypoint() {
-        let text = CONTROL.replace("bin/control-module.exe", "../control-module.exe");
+        let text = CONTROL.replace(
+            "\"windows-x64\": \"control-module.exe\"",
+            "\"windows-x64\": \"../control-module.exe\"",
+        );
+        assert_ne!(text, CONTROL);
         let manifest = Manifest::from_json(&text).unwrap();
         assert!(manifest.validate().is_err());
     }

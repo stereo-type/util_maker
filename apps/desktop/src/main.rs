@@ -251,7 +251,10 @@ fn run_control_action(app: &AppHandle, source: InvocationSource) -> Result<Invok
     let manifest_path = directory.join("manifest.json");
     let manifest = Manifest::load(&manifest_path)
         .map_err(|error| format!("манифест {}: {error}", manifest_path.display()))?;
-    let executable = directory.join(module_executable_name());
+    let entrypoint = manifest
+        .resolved_entrypoint(platform_key())
+        .map_err(|error| format!("точка входа модуля: {error}"))?;
+    let executable = directory.join(entrypoint);
     if !executable.is_file() {
         return Err(format!(
             "не найден исполняемый файл модуля: {}",
@@ -293,11 +296,12 @@ fn module_directory(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(resources.join("modules").join(CONTROL_MODULE_ID))
 }
 
-fn module_executable_name() -> &'static str {
+/// Ключ платформы в манифесте пакета.
+fn platform_key() -> &'static str {
     if cfg!(windows) {
-        "control-module.exe"
+        "windows-x64"
     } else {
-        "control-module"
+        "linux-x64"
     }
 }
 

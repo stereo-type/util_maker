@@ -6,8 +6,8 @@
   "version": "0.1.0",
   "hostApi": ">=1.0.0 <2.0.0",
   "entrypoints": {
-    "windows-x64": "bin/control-module.exe",
-    "linux-x64": "bin/control-module"
+    "windows-x64": "control-module.exe",
+    "linux-x64": "control-module"
   },
   "icon": "assets/icon.png",
   "capabilities": [],
@@ -16,7 +16,9 @@
       "id": "ping",
       "name": "Проверить связь",
       "description": "Вернуть подтверждение из отдельного процесса по IPC",
-      "recommendedHotkeys": ["Ctrl+Shift+U"]
+      "recommendedHotkeys": [
+        "Ctrl+Shift+U"
+      ]
     }
   ]
 }

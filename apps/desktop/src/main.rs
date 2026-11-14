@@ -496,6 +496,22 @@ fn main() {
             app.manage(HotkeyDemo::new());
             setup_tray(app)?;
             set_shortcut_status(app.handle(), &status);
+            if app
+                .try_state::<AppState>()
+                .and_then(|state| state.catalog.registry.module(CONTROL_MODULE_ID))
+                .is_some_and(|entry| !entry.enabled)
+            {
+                if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+                    runtime
+                        .service
+                        .lock()
+                        .expect("служба сочетаний")
+                        .unregister(HOTKEY_ID);
+                    runtime.registered.store(false, Ordering::SeqCst);
+                    runtime.paused.store(true, Ordering::SeqCst);
+                }
+                set_shortcut_status(app.handle(), "отключён");
+            }
             spawn_hotkey_listener(app.handle().clone(), events);
             let first_run = mark_and_check_first_run(app.handle())?;
             if first_run {
@@ -1195,6 +1211,29 @@ fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Resul
                 "отключён"
             }
         ));
+        if plugin_id == CONTROL_MODULE_ID {
+            if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+                let service = runtime.service.lock().expect("служба сочетаний");
+                if enabled {
+                    let combo = runtime.combo.lock().expect("сочетание").clone();
+                    if let Err(error) = service.register(&combo, HOTKEY_ID) {
+                        drop(service);
+                        let _ = state.catalog.registry.set_enabled(&plugin_id, false);
+                        return Err(register_failure_message(error));
+                    }
+                    runtime.registered.store(true, Ordering::SeqCst);
+                    runtime.paused.store(false, Ordering::SeqCst);
+                    drop(service);
+                    set_shortcut_status(&app, "зарегистрировано");
+                } else {
+                    service.unregister(HOTKEY_ID);
+                    runtime.registered.store(false, Ordering::SeqCst);
+                    runtime.paused.store(true, Ordering::SeqCst);
+                    drop(service);
+                    set_shortcut_status(&app, "отключён");
+                }
+            }
+        }
         rebuild_tray_menu(&app)?;
     }
     Ok(())

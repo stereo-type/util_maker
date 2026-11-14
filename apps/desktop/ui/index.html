@@ -168,6 +168,7 @@
         <div id="plugin-detail" hidden>
           <h3>Действия</h3>
           <div id="plugin-actions"></div>
+          <div id="plugin-settings"></div>
           <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
         </div>
       </section>
@@ -245,6 +246,7 @@
         list: document.getElementById("plugin-list"),
         detail: document.getElementById("plugin-detail"),
         actions: document.getElementById("plugin-actions"),
+        settings: document.getElementById("plugin-settings"),
         result: document.getElementById("result"),
         packagePath: document.getElementById("package-path"),
         packagePublisher: document.getElementById("package-publisher"),
@@ -375,6 +377,102 @@
         return card;
       }
 
+      function settingsFields(schema) {
+        const fields = [...(schema.fields || [])];
+        for (const profile of schema.profiles || []) {
+          fields.push(...(profile.fields || []));
+        }
+        const seen = new Set();
+        return fields.filter((field) => {
+          if (seen.has(field.id)) return false;
+          seen.add(field.id);
+          return true;
+        });
+      }
+
+      async function renderPluginSettings(plugin) {
+        elements.settings.innerHTML = "";
+        const schema = plugin.settings;
+        if (!schema) return;
+        const fields = settingsFields(schema);
+        if (!fields.length) return;
+        let values = {};
+        try {
+          values = await invoke("plugin_settings", { pluginId: plugin.id });
+        } catch (error) {
+          showResult(`Не удалось прочитать настройки: ${error}`, "error");
+          return;
+        }
+        const title = document.createElement("h4");
+        title.textContent = "Настройки";
+        const form = document.createElement("div");
+        form.className = "settings-form";
+        const inputs = new Map();
+        for (const field of fields) {
+          const label = document.createElement("label");
+          label.className = "check";
+          label.style.display = "block";
+          label.style.marginTop = "10px";
+          const caption = document.createElement("span");
+          caption.textContent = field.label + (field.required ? " *" : "");
+          label.append(caption);
+          let input;
+          if (field.type === "boolean") {
+            input = document.createElement("input");
+            input.type = "checkbox";
+            input.checked = Boolean(values[field.id] ?? field.default ?? false);
+          } else if (field.type === "select") {
+            input = document.createElement("select");
+            input.className = "hotkey-input";
+            for (const option of field.options || []) {
+              const item = document.createElement("option");
+              item.value = option.value;
+              item.textContent = option.label;
+              input.append(item);
+            }
+            input.value = String(values[field.id] ?? field.default ?? "");
+          } else if (field.type === "secret") {
+            input = document.createElement("input");
+            input.type = "password";
+            input.className = "hotkey-input";
+            input.placeholder = "Ключ хранится отдельно";
+            input.disabled = true;
+          } else {
+            input = document.createElement("input");
+            input.type = field.type === "number" ? "number" : "text";
+            input.className = "hotkey-input";
+            input.value = values[field.id] ?? field.default ?? "";
+          }
+          input.style.marginTop = "6px";
+          label.append(input);
+          form.append(label);
+          inputs.set(field.id, { input, field });
+        }
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "primary";
+        save.textContent = "Сохранить настройки";
+        save.addEventListener("click", async () => {
+          const next = {};
+          for (const [id, { input, field }] of inputs) {
+            if (field.type === "secret") continue;
+            next[id] = field.type === "boolean" ? input.checked
+              : field.type === "number" ? Number(input.value)
+              : input.value;
+          }
+          try {
+            await invoke("save_plugin_settings", { pluginId: plugin.id, values: next });
+            showResult("Настройки сохранены.", "ok");
+          } catch (error) {
+            showResult(`Не удалось сохранить настройки: ${error}`, "error");
+          }
+        });
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        actions.append(save);
+        elements.settings.append(title, form, actions);
+      }
+
       function openPlugin(plugin) {
         currentPlugin = plugin;
         elements.detail.hidden = false;
@@ -387,6 +485,7 @@
         for (const action of plugin.actions) {
           elements.actions.append(actionRow(plugin, action));
         }
+        renderPluginSettings(plugin);
         const packageActions = document.createElement("div");
         packageActions.className = "actions";
         const rollback = document.createElement("button");

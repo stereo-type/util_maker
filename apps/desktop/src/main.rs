@@ -34,7 +34,7 @@ use util_maker_core::{
     ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
 };
 use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
-use util_maker_sdk::{protocol::InvocationSource, Action, Manifest};
+use util_maker_sdk::{protocol::InvocationSource, Action, Manifest, SettingsSchema};
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
 const CONTROL_ACTION_ID: &str = "ping";
@@ -467,6 +467,8 @@ fn main() {
             assign_hotkey,
             set_hotkey_save_failure,
             plugins,
+            plugin_settings,
+            save_plugin_settings,
             preview_package,
             install_package,
             rollback_package,
@@ -1054,6 +1056,7 @@ struct PluginDto {
     enabled: bool,
     status: String,
     actions: Vec<PluginActionDto>,
+    settings: Option<SettingsSchema>,
 }
 
 /// Строит страницу настроек и трей из одного снимка активных манифестов.
@@ -1088,6 +1091,7 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
                     "отключён"
                 }
                 .to_owned(),
+                settings: entry.manifest.settings.clone(),
                 actions: entry
                     .manifest
                     .actions
@@ -1198,6 +1202,46 @@ fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
     }
     let _ = refresh_plugins_inner(&app);
     Ok(removed)
+}
+
+fn settings_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, String> {
+    if plugin_id.is_empty()
+        || !plugin_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".-_".contains(character))
+    {
+        return Err("некорректный ID плагина".to_owned());
+    }
+    let directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("каталог данных: {error}"))?
+        .join("plugin-settings");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory.join(format!("{plugin_id}.json")))
+}
+
+#[tauri::command]
+fn plugin_settings(app: AppHandle, plugin_id: String) -> Result<serde_json::Value, String> {
+    let path = settings_path(&app, &plugin_id)?;
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|error| format!("настройки плагина: {error}"))
+}
+
+#[tauri::command]
+fn save_plugin_settings(
+    app: AppHandle,
+    plugin_id: String,
+    values: serde_json::Value,
+) -> Result<(), String> {
+    let path = settings_path(&app, &plugin_id)?;
+    let temp = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(&values).map_err(|error| error.to_string())?;
+    std::fs::write(&temp, bytes).map_err(|error| error.to_string())?;
+    std::fs::rename(temp, path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

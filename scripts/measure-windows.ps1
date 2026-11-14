@@ -6,8 +6,8 @@
 #   .\scripts\measure-windows.ps1 -InvokeBenchmark    # p95 по журналу
 #
 # Private Working Set снимается счётчиком Win32_PerfRawData_PerfProc_Process
-# (WorkingSetPrivate) для процессов хоста, модуля и WebView2. CPU считается по
-# дельте суммарного времени процессов.
+# (WorkingSetPrivate) для хоста и всех его потомков: процесса модуля и
+# WebView2. Чужие экземпляры msedgewebview2 в замер не попадают.
 
 param(
     [int]$Seconds = 60,
@@ -17,30 +17,54 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$processNames = @("util-maker-desktop", "control-module", "msedgewebview2")
 
-function Get-ProductProcesses {
-    Get-CimInstance Win32_Process |
-        Where-Object { $processNames -contains $_.Name.Replace(".exe", "") }
+function Get-ProductProcessIds {
+    $all = Get-CimInstance Win32_Process
+    $roots = @(
+        $all |
+            Where-Object { $_.Name -eq "util-maker-desktop.exe" } |
+            Select-Object -ExpandProperty ProcessId
+    )
+    if ($roots.Count -eq 0) {
+        return @()
+    }
+    $ids = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($rootId in $roots) {
+        [void]$ids.Add([int]$rootId)
+    }
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+        foreach ($process in $all) {
+            if ($ids.Contains([int]$process.ParentProcessId) -and
+                -not $ids.Contains([int]$process.ProcessId)) {
+                [void]$ids.Add([int]$process.ProcessId)
+                $changed = $true
+            }
+        }
+    }
+    @($ids)
 }
 
 function Get-PrivateWorkingSetBytes {
-    $processes = Get-ProductProcesses
-    if (-not $processes) { return 0 }
-    $ids = $processes | Select-Object -ExpandProperty ProcessId
+    $ids = Get-ProductProcessIds
+    if ($ids.Count -eq 0) {
+        return 0
+    }
     $counters = Get-CimInstance Win32_PerfRawData_PerfProc_Process |
         Where-Object { $ids -contains $_.IDProcess }
     ($counters | Measure-Object -Property WorkingSetPrivate -Sum).Sum
 }
 
 function Get-TotalCpuSeconds {
-    $processes = Get-ProductProcesses
-    if (-not $processes) { return 0.0 }
-    $ids = $processes | Select-Object -ExpandProperty ProcessId
+    $ids = Get-ProductProcessIds
+    if ($ids.Count -eq 0) {
+        return 0.0
+    }
     $total = 0.0
-    foreach ($id in $ids) {
+    foreach ($processId in $ids) {
         try {
-            $process = Get-Process -Id $id -ErrorAction Stop
+            $process = Get-Process -Id $processId -ErrorAction Stop
             $total += $process.TotalProcessorTime.TotalSeconds
         } catch {
             # Процесс завершился между снимками — пропускаем.

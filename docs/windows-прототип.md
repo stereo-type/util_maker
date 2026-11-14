@@ -80,9 +80,9 @@ NSIS, затем кросс-собирает `util-maker-desktop.exe` и `contro
    .\scripts\measure-windows.ps1 -Seconds 600
    ```
 
-   Скрипт раз в секунду суммирует Private Working Set процессов
-   `util-maker-desktop`, `control-module` и `msedgewebview2` и считает среднюю
-   загрузку CPU по дельте времени процессов.
+   Скрипт раз в секунду суммирует Private Working Set хоста и всех его
+   потомков (процесс модуля, WebView2) и считает среднюю загрузку CPU по дельте
+   времени этих процессов. Чужие экземпляры `msedgewebview2` не учитываются.
 3. **Бюджет:** сумма Private Working Set ≤ 60 МиБ, средний CPU за 10 минут
    ≤ 0,2 % суммарной мощности. Если процессы WebView2 отсутствуют, это
    ожидаемо: настройки закрыты, WebView уничтожен.

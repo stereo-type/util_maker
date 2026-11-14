@@ -4,7 +4,6 @@ DEV_HOME := /workspace/.cache/util-maker-dev
 WINDOWS_IMAGE ?= util-maker-windows:local
 WINDOWS_CACHE := .cache/windows-build
 BUILD_KIND ?= dev
-BUILD_NUMBER ?= 0
 CONTROL_SAMPLES_DIR ?= dist/control-samples
 CONTROL_SAMPLE_VERSIONS ?= 0.4.1 0.5.0
 CONTROL_SAMPLE_PLATFORM ?= linux-x64
@@ -31,11 +30,10 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env CARGO_HOME=/workspace/$(WINDOWS_CACHE)/cargo \
 	--env CARGO_TARGET_DIR=/workspace/$(WINDOWS_CACHE)/target \
 	--env XWIN_CACHE_DIR=/workspace/$(WINDOWS_CACHE)/xwin \
-	--env UTIL_MAKER_BUILD=$(BUILD_KIND) \
-	--env UTIL_MAKER_BUILD_NUMBER=$(BUILD_NUMBER)
+	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
-	version check-version icons control-samples example-package package-export windows-image build-windows
+	version check-version bump-version icons control-samples example-package package-export windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -47,11 +45,12 @@ help:
 		'make test  — тесты workspace, включая IPC контрольного модуля' \
 		'make check  — сверка версии + fmt + lint + test' \
 		'make version  — показать версию и тип сборки' \
+		'make bump-version VERSION=x.y.z  — поднять версию в Cargo.toml, tauri.conf.json и установщике' \
 		'make icons  — пересоздать иконки приложения' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
 		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
-		'make build-windows  — собрать NSIS-установщик в dist/ (BUILD_KIND, BUILD_NUMBER)'
+		'make build-windows  — собрать NSIS-установщик в dist/ (BUILD_KIND=dev)'
 
 dev-image:
 	docker build --tag "$(DEV_IMAGE)" docker/dev
@@ -80,7 +79,16 @@ test: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test --workspace --all-targets"
 
 version:
-	@printf 'Версия: %s\nТип сборки: %s\nНомер сборки: %s\n' "$(VERSION)" "$(BUILD_KIND)" "$(BUILD_NUMBER)"
+	@printf 'Версия: %s\nТип сборки: %s\n' "$(VERSION)" "$(BUILD_KIND)"
+
+bump-version:
+	@test -n "$(VERSION)" || { echo 'Укажите VERSION=x.y.z'; exit 2; }
+	@echo "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$$' || { echo 'VERSION должен быть в формате x.y.z'; exit 2; }
+	@sed -i '0,/^version = ".*"/s//version = "$(VERSION)"/' Cargo.toml
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' apps/desktop/tauri.conf.json
+	@sed -i 's/!define VERSION "[^"]*"/!define VERSION "$(VERSION)"/' installer/util-maker.nsi
+	@sed -i 's/Util Maker — прототип [0-9][0-9.]*/Util Maker — прототип $(VERSION)/' installer/README.txt
+	@echo "Версия $(VERSION) записана в Cargo.toml, tauri.conf.json и установщик. Проверьте make check-version."
 
 check-version:
 	@cargo_version=$$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1); \

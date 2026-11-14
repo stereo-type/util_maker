@@ -73,12 +73,13 @@ make check              # версия, rustfmt, clippy, тесты
 make example-package    # подписанный пример стороннего плагина в dist/
 make package-export     # подписать подготовленный каталог (PACKAGE_* в параметрах)
 make build-windows      # NSIS-установщик в dist/
-make build-windows BUILD_NUMBER=42 # номер сборки из окружения
-make version            # версия, тип и номер сборки
+make bump-version VERSION=0.4.2  # поднять версию продукта
+make version            # версия и тип сборки
 ```
 
-Номер и тип сборки задаются переменными `BUILD_NUMBER` и `BUILD_KIND`;
-установщик получает имя `UtilMaker-Setup-<версия>-<тип>-b<номер>.exe`.
+Тип сборки задаётся `BUILD_KIND`; версия продукта — semver в исходниках и
+`make bump-version`. Установщик получает имя
+`UtilMaker-Setup-<версия>-<тип>.exe`.
 
 Требуется Docker Engine. Установщик собирается под
 `x86_64-pc-windows-msvc` с cargo-xwin и NSIS; запускать его нужно на Windows 11

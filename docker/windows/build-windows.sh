@@ -16,11 +16,7 @@ target_dir="${CARGO_TARGET_DIR:-/workspace/.cache/windows-build/target}"
 export CARGO_TARGET_DIR="$target_dir"
 
 
-build_number=$(printf '%s' "${UTIL_MAKER_BUILD_NUMBER:-0}" | tr -cd '0-9')
-if [ -z "$build_number" ]; then
-    build_number=0
-fi
-echo "Util Maker $version: сборка x86_64-pc-windows-msvc, тип ${UTIL_MAKER_BUILD:-dev}, номер $build_number"
+echo "Util Maker $version: сборка x86_64-pc-windows-msvc, тип ${UTIL_MAKER_BUILD:-dev}"
 cargo xwin build --release --target x86_64-pc-windows-msvc \
     -p util-maker-desktop -p util-maker-control-module \
     --bin util-maker-desktop --bin control-module
@@ -41,13 +37,12 @@ build_kind=$(printf '%s' "${UTIL_MAKER_BUILD:-dev}" | tr -cd 'A-Za-z0-9._-')
 if [ -z "$build_kind" ]; then
     build_kind=dev
 fi
-out="/workspace/dist/UtilMaker-Setup-$version-$build_kind-b$build_number.exe"
+out="/workspace/dist/UtilMaker-Setup-$version-$build_kind.exe"
 rm -f "$out"
 
 makensis -V2 \
     -DVERSION="$version" \
     -DBUILD_KIND="$build_kind" \
-    -DBUILD_NUMBER="$build_number" \
     -DAPP_EXE="$exe" \
     -DMODULE_EXE="$module" \
     -DMODULE_MANIFEST="$manifest" \

@@ -11,7 +11,6 @@
 ;   OUT_FILE         — путь к итоговому .exe
 ;   VERSION          — версия продукта
 ;   BUILD_KIND       — тип сборки (dev/release)
-;   BUILD_NUMBER     — номер сборки из окружения
 
 Unicode true
 !include "MUI2.nsh"
@@ -21,9 +20,6 @@ Unicode true
 !endif
 !ifndef BUILD_KIND
     !define BUILD_KIND "dev"
-!endif
-!ifndef BUILD_NUMBER
-    !define BUILD_NUMBER "0"
 !endif
 !ifndef APP_EXE
     !error "Не задан APP_EXE"
@@ -45,7 +41,7 @@ Unicode true
 !define APP_ID "UtilMakerPrototype"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
 
-Name "${APP_NAME} ${VERSION} (${BUILD_KIND}, build ${BUILD_NUMBER})"
+Name "${APP_NAME} ${VERSION} (${BUILD_KIND})"
 OutFile "${OUT_FILE}"
 InstallDir "$LOCALAPPDATA\Util Maker"
 InstallDirRegKey HKCU "Software\Util Maker" "InstallDir"
@@ -111,7 +107,7 @@ previous_removed:
 
     WriteRegStr HKCU "Software\Util Maker" "InstallDir" "$INSTDIR"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME} (прототип)"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION} (${BUILD_KIND}, build ${BUILD_NUMBER})"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION} (${BUILD_KIND})"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\util-maker-desktop.exe"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "Util Maker"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"

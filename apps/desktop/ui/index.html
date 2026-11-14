@@ -521,7 +521,7 @@
           const status = await invoke("get_status");
           elements.log.textContent = status.logPath || "недоступен";
           elements.config.textContent = status.configPath || "недоступен";
-          elements.build.textContent = `Версия ${status.appVersion}, сборка ${status.buildKind}, номер ${status.buildNumber}.`;
+          elements.build.textContent = `Версия ${status.appVersion}, сборка ${status.buildKind}.`;
         } catch (error) {
           elements.log.textContent = String(error);
         }

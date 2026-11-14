@@ -17,8 +17,6 @@ const MAX_LOG_BYTES: u64 = 1024 * 1024;
 
 /// Тип сборки, заданный через `UTIL_MAKER_BUILD` при сборке.
 pub const BUILD_KIND: &str = env!("UTIL_MAKER_BUILD");
-/// Номер сборки, заданный через `UTIL_MAKER_BUILD_NUMBER` при сборке.
-pub const BUILD_NUMBER: &str = env!("UTIL_MAKER_BUILD_NUMBER");
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static LOG_LOCK: Mutex<()> = Mutex::new(());
@@ -36,7 +34,7 @@ pub fn init() {
         .map(|value| value.display().to_string())
         .unwrap_or_else(|_| "неизвестно".to_owned());
     write(&format!(
-        "старт version={} build={BUILD_KIND} build_number={BUILD_NUMBER} exe={executable} log={}",
+        "старт version={} build={BUILD_KIND} exe={executable} log={}",
         env!("CARGO_PKG_VERSION"),
         path.display()
     ));
@@ -67,10 +65,6 @@ fn log_directory() -> PathBuf {
 
 pub fn build_kind() -> &'static str {
     BUILD_KIND
-}
-
-pub fn build_number() -> &'static str {
-    BUILD_NUMBER
 }
 
 /// Подробная запись для dev-сборки.

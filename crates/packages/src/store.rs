@@ -36,6 +36,10 @@ struct StoreState {
     modules: BTreeMap<String, InstalledModule>,
     #[serde(default)]
     previous: BTreeMap<String, InstalledModule>,
+    #[serde(default)]
+    settings: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    previous_settings: BTreeMap<String, serde_json::Value>,
 }
 
 /// Каталог установленных версий и активная запись профиля.
@@ -72,6 +76,20 @@ impl PackageStore {
         self.state.previous.get(id)
     }
 
+    pub fn settings(&self, id: &str) -> Option<&serde_json::Value> {
+        self.state.settings.get(id)
+    }
+
+    /// Сохраняет настройки модуля; при откате вернётся снимок предыдущей версии.
+    pub fn save_settings(
+        &mut self,
+        id: &str,
+        value: serde_json::Value,
+    ) -> Result<(), PackageError> {
+        self.state.settings.insert(id.to_owned(), value);
+        self.write_state()
+    }
+
     /// Возвращает предыдущую версию и её метаданные.
     pub fn rollback(&mut self, id: &str) -> Result<InstalledModule, PackageError> {
         let previous =
@@ -79,11 +97,18 @@ impl PackageStore {
                 PackageError::Install(format!("нет предыдущей версии модуля {id}"))
             })?;
         let active = self.state.modules.insert(id.to_owned(), previous.clone());
+        let previous_settings = self.state.previous_settings.remove(id);
+        if let Some(settings) = previous_settings.clone() {
+            self.state.settings.insert(id.to_owned(), settings);
+        }
         if let Err(error) = self.write_state() {
             self.state
                 .modules
                 .insert(id.to_owned(), active.expect("активная версия"));
             self.state.previous.insert(id.to_owned(), previous);
+            if let Some(settings) = previous_settings {
+                self.state.previous_settings.insert(id.to_owned(), settings);
+            }
             return Err(error);
         }
         Ok(previous)
@@ -148,6 +173,17 @@ impl PackageStore {
         };
         let previous_active = self.state.modules.get(&installed.id).cloned();
         let previous_map = self.state.previous.clone();
+        let previous_settings = self.state.previous_settings.clone();
+        if previous_active
+            .as_ref()
+            .is_some_and(|old| old.version != installed.version)
+        {
+            if let Some(settings) = self.state.settings.get(&installed.id) {
+                self.state
+                    .previous_settings
+                    .insert(installed.id.clone(), settings.clone());
+            }
+        }
         if let Some(old) = previous_active
             .as_ref()
             .filter(|old| old.version != installed.version)
@@ -162,6 +198,7 @@ impl PackageStore {
         if let Err(error) = self.write_state() {
             // Не оставляем активную запись, если метаданные не записались.
             self.state.previous = previous_map;
+            self.state.previous_settings = previous_settings;
             if let Some(old) = previous_active {
                 self.state.modules.insert(installed.id.clone(), old);
             } else {
@@ -341,6 +378,36 @@ mod tests {
         assert_eq!(
             reopened.module("com.example.rollback").unwrap().version,
             "0.1.0"
+        );
+    }
+
+    #[test]
+    fn rollback_restores_previous_settings_snapshot() {
+        let (v1, trust, root) = package("com.example.settings", "com.example", "0.1.0", 7);
+        let (v2, _, _) = package("com.example.settings", "com.example", "0.2.0", 7);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&v1, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .save_settings("com.example.settings", serde_json::json!({"profile": "v1"}))
+            .unwrap();
+        store
+            .install(&v2, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .save_settings("com.example.settings", serde_json::json!({"profile": "v2"}))
+            .unwrap();
+        store.rollback("com.example.settings").unwrap();
+        assert_eq!(
+            store.settings("com.example.settings"),
+            Some(&serde_json::json!({"profile": "v1"}))
+        );
+        let reopened = PackageStore::open(&profile).unwrap();
+        assert_eq!(
+            reopened.settings("com.example.settings"),
+            Some(&serde_json::json!({"profile": "v1"}))
         );
     }
 

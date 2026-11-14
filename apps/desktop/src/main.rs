@@ -9,8 +9,8 @@
 
 mod logging;
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Mutex;
@@ -27,7 +27,7 @@ use util_maker_core::hotkeys::{
     AssignmentRecord, Candidate, CheckResult, Confirmation, HotkeyPlatform, HotkeyRegistry,
     HotkeyStore, Owner, RegistrationError, StoreError,
 };
-use util_maker_core::{ActionRef, InvokeOutcome, Registry};
+use util_maker_core::{ActionRef, InvokeOutcome, ModuleEntry, Registry};
 use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
 use util_maker_sdk::{protocol::InvocationSource, Manifest};
 
@@ -39,9 +39,138 @@ const RESULT_WINDOW: &str = "result";
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
 const HOTKEY_ID: u32 = 1;
 
-#[derive(Default)]
 struct AppState {
     last_result: Mutex<Option<LastResult>>,
+    catalog: CatalogState,
+    tray_actions: Mutex<BTreeMap<String, ActionRef>>,
+}
+
+/// Каталог установленных модулей и реестр ядра.
+struct CatalogState {
+    root: PathBuf,
+    registry: Registry,
+    errors: Mutex<Vec<String>>,
+}
+
+impl CatalogState {
+    fn open(app: &AppHandle) -> Result<Self, String> {
+        let root = module_catalog_directory(app)?;
+        let data_directory = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|error| format!("каталог данных приложения: {error}"))?;
+        std::fs::create_dir_all(&data_directory)
+            .map_err(|error| format!("каталог {}: {error}", data_directory.display()))?;
+        let registry = Registry::with_state_path(data_directory.join("packages.json"))
+            .map_err(|error| format!("состояние пакетов: {error}"))?;
+        let state = Self {
+            root,
+            registry,
+            errors: Mutex::new(Vec::new()),
+        };
+        state.refresh();
+        Ok(state)
+    }
+
+    /// Перечитывает манифесты с диска. Ошибки отдельных модулей не скрывают
+    /// остальные установленные пакеты.
+    fn refresh(&self) -> Vec<String> {
+        match discover_modules(&self.root, platform_key()) {
+            Ok((entries, errors)) => {
+                if let Err(error) = self.registry.replace_packages(entries) {
+                    let mut all = errors;
+                    all.push(format!("каталог модулей: {error}"));
+                    *self.errors.lock().expect("ошибки каталога") = all.clone();
+                    return all;
+                }
+                *self.errors.lock().expect("ошибки каталога") = errors.clone();
+                errors
+            }
+            Err(error) => {
+                let errors = vec![error];
+                *self.errors.lock().expect("ошибки каталога") = errors.clone();
+                errors
+            }
+        }
+    }
+}
+
+/// Каталог рядом с исполняемым файлом либо установленные ресурсы.
+fn module_catalog_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(directory) = std::env::var_os("UTIL_MAKER_MODULES_DIR") {
+        return Ok(PathBuf::from(directory));
+    }
+    let executable =
+        std::env::current_exe().map_err(|error| format!("путь приложения: {error}"))?;
+    let beside_exe = executable
+        .parent()
+        .ok_or_else(|| "у приложения нет каталога".to_owned())?
+        .join("modules");
+    if beside_exe.is_dir() {
+        return Ok(beside_exe);
+    }
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("каталог ресурсов: {error}"))?;
+    Ok(resources.join("modules"))
+}
+
+/// Читает активные манифесты и проверяет точки входа, не запуская процессы.
+fn discover_modules(
+    root: &Path,
+    platform: &str,
+) -> Result<(Vec<ModuleEntry>, Vec<String>), String> {
+    let entries = std::fs::read_dir(root)
+        .map_err(|error| format!("каталог модулей {}: {error}", root.display()))?;
+    let mut modules = Vec::new();
+    let mut errors = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors.push(format!("элемент каталога {}: {error}", root.display()));
+                continue;
+            }
+        };
+        let directory = entry.path();
+        if !directory.is_dir() {
+            continue;
+        }
+        let manifest_path = directory.join("manifest.json");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let manifest = match Manifest::load(&manifest_path) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                errors.push(format!("{}: {error}", manifest_path.display()));
+                continue;
+            }
+        };
+        let entrypoint = match manifest.resolved_entrypoint(platform) {
+            Ok(entrypoint) => entrypoint,
+            Err(error) => {
+                errors.push(format!(
+                    "{}: точка входа {platform}: {error}",
+                    manifest_path.display()
+                ));
+                continue;
+            }
+        };
+        let executable = directory.join(entrypoint);
+        if !executable.is_file() {
+            errors.push(format!(
+                "{}: не найден исполняемый файл {}",
+                manifest_path.display(),
+                executable.display()
+            ));
+            continue;
+        }
+        modules.push(ModuleEntry::new(manifest, executable, true));
+    }
+    modules.sort_by(|left, right| left.manifest.id.cmp(&right.manifest.id));
+    Ok((modules, errors))
 }
 
 // --- Демонстрационный реестр шорткеев для редактора настроек ---
@@ -313,10 +442,11 @@ fn main() {
             logging::write("повторный запуск: показываю настройки существующего экземпляра");
             open_settings(app);
         }))
-        .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_status,
             invoke_control,
+            invoke_plugin_action,
+            refresh_plugins,
             get_last_result,
             open_settings_command,
             close_settings,
@@ -333,11 +463,17 @@ fn main() {
             quit_app
         ])
         .setup(|app| {
-            setup_tray(app)?;
+            let state = AppState {
+                last_result: Mutex::new(None),
+                catalog: CatalogState::open(app.handle())?,
+                tray_actions: Mutex::new(BTreeMap::new()),
+            };
+            app.manage(state);
             let (runtime, events) = ShortcutRuntime::start(app.handle())?;
             let status = runtime.status.lock().expect("статус сочетания").clone();
             app.manage(runtime);
             app.manage(HotkeyDemo::new());
+            setup_tray(app)?;
             set_shortcut_status(app.handle(), &status);
             spawn_hotkey_listener(app.handle().clone(), events);
             let first_run = mark_and_check_first_run(app.handle())?;
@@ -367,57 +503,36 @@ fn main() {
 }
 
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let settings = MenuItem::with_id(app, "settings", "Настройки", true, None::<&str>)?;
-    let invoke = MenuItem::with_id(app, "invoke", "Проверить связь", true, None::<&str>)?;
-    let pause = MenuItem::with_id(
-        app,
-        "pause",
-        "Пауза / возобновить сочетание",
-        true,
-        None::<&str>,
-    )?;
-    let retry = MenuItem::with_id(
-        app,
-        "retry",
-        "Перерегистрировать сочетание",
-        true,
-        None::<&str>,
-    )?;
-    let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let second_separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &settings,
-            &invoke,
-            &separator,
-            &pause,
-            &retry,
-            &second_separator,
-            &quit,
-        ],
-    )?;
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
     TrayIconBuilder::with_id("main")
         .icon(icon)
         .tooltip("Util Maker — прототип")
-        .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "settings" => {
                 logging::write("меню трея: настройки");
                 open_settings(app);
             }
-            "invoke" => {
-                logging::write("меню трея: проверка связи");
-                invoke_and_show(app, InvocationSource::Tray);
-            }
             "pause" => toggle_shortcut_pause(app),
             "retry" => retry_shortcut(app),
             "quit" => quit_application(app),
-            _ => {}
+            id => {
+                let target = app.try_state::<AppState>().and_then(|state| {
+                    state
+                        .tray_actions
+                        .lock()
+                        .ok()
+                        .and_then(|actions| actions.get(id).cloned())
+                });
+                if let Some(target) = target {
+                    logging::write(&format!(
+                        "меню трея: {} / {}",
+                        target.module_id, target.action_id
+                    ));
+                    invoke_and_show(app, target, InvocationSource::Tray);
+                }
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -430,6 +545,97 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .build(app)?;
+    rebuild_tray_menu(app.handle()).map_err(std::io::Error::other)?;
+    Ok(())
+}
+
+/// Пересобирает меню трея из активных манифестов. Сами процессы не
+/// запускаются: источником служит снимок каталога в реестре.
+fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
+    let actions = app
+        .try_state::<AppState>()
+        .map(|state| state.catalog.registry.actions())
+        .unwrap_or_default();
+    let menu = Menu::new(app).map_err(|error| format!("меню трея: {error}"))?;
+    let settings = MenuItem::with_id(app, "settings", "Настройки", true, None::<&str>)
+        .map_err(|error| format!("пункт настроек: {error}"))?;
+    menu.append(&settings)
+        .map_err(|error| format!("меню трея: {error}"))?;
+    menu.append(
+        &PredefinedMenuItem::separator(app)
+            .map_err(|error| format!("разделитель меню: {error}"))?,
+    )
+    .map_err(|error| format!("меню трея: {error}"))?;
+
+    let mut mapping = BTreeMap::new();
+    if actions.is_empty() {
+        let item = MenuItem::with_id(
+            app,
+            "no-actions",
+            "Нет доступных действий",
+            false,
+            None::<&str>,
+        )
+        .map_err(|error| format!("пункт меню: {error}"))?;
+        menu.append(&item)
+            .map_err(|error| format!("меню трея: {error}"))?;
+    } else {
+        for (index, action) in actions.iter().enumerate() {
+            mapping.insert(
+                format!("action:{index}"),
+                ActionRef::new(action.module_id.clone(), action.action_id.clone()),
+            );
+            let item = MenuItem::with_id(
+                app,
+                format!("action:{index}"),
+                format!("{} — {}", action.module_name, action.action_name),
+                action.enabled,
+                None::<&str>,
+            )
+            .map_err(|error| format!("пункт действия: {error}"))?;
+            menu.append(&item)
+                .map_err(|error| format!("меню трея: {error}"))?;
+        }
+    }
+
+    menu.append(
+        &PredefinedMenuItem::separator(app)
+            .map_err(|error| format!("разделитель меню: {error}"))?,
+    )
+    .map_err(|error| format!("меню трея: {error}"))?;
+    for (id, label) in [
+        ("pause", "Пауза / возобновить сочетание"),
+        ("retry", "Перерегистрировать сочетание"),
+        ("quit", "Выход"),
+    ] {
+        let item = MenuItem::with_id(app, id, label, true, None::<&str>)
+            .map_err(|error| format!("пункт меню {id}: {error}"))?;
+        menu.append(&item)
+            .map_err(|error| format!("меню трея: {error}"))?;
+    }
+
+    let tray = app
+        .tray_by_id("main")
+        .ok_or_else(|| "иконка трея не создана".to_owned())?;
+    tray.set_menu(Some(menu))
+        .map_err(|error| format!("обновление меню трея: {error}"))?;
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.tray_actions.lock().expect("меню действий") = mapping;
+    }
+    let errors = app
+        .try_state::<AppState>()
+        .map(|state| {
+            state
+                .catalog
+                .errors
+                .lock()
+                .expect("ошибки каталога")
+                .clone()
+        })
+        .unwrap_or_default();
+    for error in errors {
+        logging::write(&format!("каталог модулей: {error}"));
+    }
     Ok(())
 }
 
@@ -490,14 +696,58 @@ fn show_result(app: &AppHandle, result: LastResult) {
     }
 }
 
-fn invoke_and_show(app: &AppHandle, source: InvocationSource) {
+fn control_action_ref() -> ActionRef {
+    ActionRef::new(CONTROL_MODULE_ID, CONTROL_ACTION_ID)
+}
+
+fn action_name_for(app: &AppHandle, target: &ActionRef) -> String {
+    app.try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .catalog
+                .registry
+                .module(&target.module_id)
+                .and_then(|entry| {
+                    entry
+                        .manifest
+                        .action(&target.action_id)
+                        .map(|action| action.name.clone())
+                })
+        })
+        .unwrap_or_else(|| target.action_id.clone())
+}
+
+fn invoke_action(
+    app: &AppHandle,
+    target: &ActionRef,
+    source: InvocationSource,
+) -> Result<InvokeOutcome, String> {
+    logging::debug(&format!(
+        "вызов действия module={} action={} source={}",
+        target.module_id,
+        target.action_id,
+        source.as_str()
+    ));
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    state
+        .catalog
+        .registry
+        .invoke(target, source, INVOKE_TIMEOUT, Some(logging::logger()))
+        .map_err(|error| error.to_string())
+}
+
+fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
     let started = Instant::now();
-    match run_control_action(app, source) {
+    match invoke_action(app, &target, source) {
         Ok(outcome) => {
             let since_event = started.elapsed();
             logging::write(&format!(
-                "hotkey->result source={} core_elapsed_ms={} since_event_ms={}",
+                "action->result source={} module={} action={} core_elapsed_ms={} since_event_ms={}",
                 source.as_str(),
+                outcome.module_id,
+                outcome.action_id,
                 outcome.elapsed.as_millis(),
                 since_event.as_millis()
             ));
@@ -515,14 +765,16 @@ fn invoke_and_show(app: &AppHandle, source: InvocationSource) {
         }
         Err(error) => {
             logging::write(&format!(
-                "ошибка вызова source={}: {error}",
+                "ошибка вызова module={} action={} source={}: {error}",
+                target.module_id,
+                target.action_id,
                 source.as_str()
             ));
             show_result(
                 app,
                 LastResult {
                     message: format!("Не удалось выполнить действие: {error}"),
-                    action_name: "Проверить связь".to_owned(),
+                    action_name: action_name_for(app, &target),
                     source: source.as_str().to_owned(),
                     core_elapsed_ms: 0,
                     since_event_ms: started.elapsed().as_millis(),
@@ -547,7 +799,7 @@ fn spawn_hotkey_listener(app: AppHandle, events: Receiver<HotkeyEvent>) {
                 }
                 let handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
-                    invoke_and_show(&handle, InvocationSource::Hotkey);
+                    invoke_and_show(&handle, control_action_ref(), InvocationSource::Hotkey);
                 });
             }
             Ok(_) => {}
@@ -660,57 +912,6 @@ fn retry_shortcut(app: &AppHandle) {
     set_shortcut_status(app, &status);
 }
 
-fn run_control_action(app: &AppHandle, source: InvocationSource) -> Result<InvokeOutcome, String> {
-    logging::debug(&format!("вызов действия source={}", source.as_str()));
-    let directory = module_directory(app)?;
-    let manifest_path = directory.join("manifest.json");
-    let manifest = Manifest::load(&manifest_path)
-        .map_err(|error| format!("манифест {}: {error}", manifest_path.display()))?;
-    let entrypoint = manifest
-        .resolved_entrypoint(platform_key())
-        .map_err(|error| format!("точка входа модуля: {error}"))?;
-    let executable = directory.join(entrypoint);
-    if !executable.is_file() {
-        return Err(format!(
-            "не найден исполняемый файл модуля: {}",
-            executable.display()
-        ));
-    }
-    let mut registry = Registry::new();
-    registry
-        .add(manifest, executable)
-        .map_err(|error| error.to_string())?;
-    registry
-        .invoke(
-            &ActionRef::new(CONTROL_MODULE_ID, CONTROL_ACTION_ID),
-            source,
-            INVOKE_TIMEOUT,
-            Some(logging::logger()),
-        )
-        .map_err(|error| error.to_string())
-}
-
-fn module_directory(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(directory) = std::env::var_os("UTIL_MAKER_MODULES_DIR") {
-        return Ok(PathBuf::from(directory).join(CONTROL_MODULE_ID));
-    }
-    let executable =
-        std::env::current_exe().map_err(|error| format!("путь приложения: {error}"))?;
-    let beside_exe = executable
-        .parent()
-        .ok_or_else(|| "у приложения нет каталога".to_owned())?
-        .join("modules")
-        .join(CONTROL_MODULE_ID);
-    if beside_exe.is_dir() {
-        return Ok(beside_exe);
-    }
-    let resources = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("каталог ресурсов: {error}"))?;
-    Ok(resources.join("modules").join(CONTROL_MODULE_ID))
-}
-
 /// Ключ платформы в манифесте пакета.
 fn platform_key() -> &'static str {
     if cfg!(windows) {
@@ -736,86 +937,148 @@ struct PluginDto {
     name: String,
     version: String,
     publisher: String,
+    icon: Option<String>,
     installed: bool,
     enabled: bool,
     status: String,
     actions: Vec<PluginActionDto>,
 }
 
-#[tauri::command]
-fn plugins(app: AppHandle) -> Vec<PluginDto> {
-    let mut result = Vec::new();
-    if let Ok(directory) = module_directory(&app) {
-        if let Ok(manifest) = Manifest::load(&directory.join("manifest.json")) {
-            let shortcut = app
-                .try_state::<ShortcutRuntime>()
-                .and_then(|runtime| runtime.combo.lock().ok().map(|combo| combo.clone()))
-                .unwrap_or_else(|| CONTROL_SHORTCUT.to_owned());
-            let status = app
-                .try_state::<ShortcutRuntime>()
-                .and_then(|runtime| runtime.status.lock().ok().map(|value| value.clone()))
-                .unwrap_or_else(|| "неизвестно".to_owned());
-            result.push(PluginDto {
-                id: manifest.id.clone(),
-                name: manifest.name.clone(),
-                version: manifest.version.clone(),
-                publisher: manifest.publisher.clone(),
+/// Строит страницу настроек и трей из одного снимка активных манифестов.
+fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Vec::new();
+    };
+    state
+        .catalog
+        .registry
+        .modules()
+        .into_iter()
+        .map(|entry| {
+            let enabled = entry.enabled;
+            let icon = entry.manifest.icon.as_ref().and_then(|icon| {
+                entry
+                    .executable
+                    .parent()
+                    .and_then(|directory| icon_data_url(&directory.join(icon)))
+            });
+            PluginDto {
+                id: entry.manifest.id.clone(),
+                name: entry.manifest.name.clone(),
+                version: entry.manifest.version.clone(),
+                publisher: entry.manifest.publisher.clone(),
+                icon,
                 installed: true,
-                enabled: !app
-                    .try_state::<ShortcutRuntime>()
-                    .map(|runtime| runtime.paused.load(Ordering::SeqCst))
-                    .unwrap_or(false),
-                status,
-                actions: manifest
+                enabled,
+                status: if enabled {
+                    "включён"
+                } else {
+                    "отключён"
+                }
+                .to_owned(),
+                actions: entry
+                    .manifest
                     .actions
                     .iter()
                     .map(|action| PluginActionDto {
                         id: action.id.clone(),
                         name: action.name.clone(),
                         description: action.description().to_owned(),
-                        hotkey: (action.id == CONTROL_ACTION_ID).then(|| shortcut.clone()),
+                        hotkey: action.recommended_hotkeys.first().cloned(),
                     })
                     .collect(),
-            });
-        }
+            }
+        })
+        .collect()
+}
+
+fn refresh_plugins_inner(app: &AppHandle) -> Vec<PluginDto> {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.catalog.refresh();
     }
-    result.push(PluginDto {
-        id: "org.utilmaker.screenshot".to_owned(),
-        name: "Скриншоты".to_owned(),
-        version: "—".to_owned(),
-        publisher: "org.utilmaker".to_owned(),
-        installed: false,
-        enabled: false,
-        status: "пакет не установлен".to_owned(),
-        actions: Vec::new(),
-    });
-    result.push(PluginDto {
-        id: "org.utilmaker.translator".to_owned(),
-        name: "Переводчик".to_owned(),
-        version: "—".to_owned(),
-        publisher: "org.utilmaker".to_owned(),
-        installed: false,
-        enabled: false,
-        status: "пакет не установлен".to_owned(),
-        actions: Vec::new(),
-    });
-    result
+    if let Err(error) = rebuild_tray_menu(app) {
+        logging::write(&format!("меню трея: {error}"));
+    }
+    collect_plugins(app)
+}
+
+#[tauri::command]
+fn plugins(app: AppHandle) -> Vec<PluginDto> {
+    refresh_plugins_inner(&app)
+}
+
+#[tauri::command]
+fn refresh_plugins(app: AppHandle) -> Vec<PluginDto> {
+    refresh_plugins_inner(&app)
 }
 
 #[tauri::command]
 fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Result<(), String> {
-    if plugin_id != CONTROL_MODULE_ID {
-        return Err("пакет этого микроприложения не установлен".to_owned());
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    let changed = state
+        .catalog
+        .registry
+        .set_enabled(&plugin_id, enabled)
+        .map_err(|error| error.to_string())?;
+    if changed {
+        logging::write(&format!(
+            "пакет {plugin_id}: {}",
+            if enabled {
+                "включён"
+            } else {
+                "отключён"
+            }
+        ));
+        rebuild_tray_menu(&app)?;
     }
-    let Some(state) = app.try_state::<ShortcutRuntime>() else {
-        return Err("служба сочетаний недоступна".to_owned());
-    };
-    let paused = state.paused.load(Ordering::SeqCst);
-    if enabled == !paused {
-        return Ok(());
-    }
-    toggle_shortcut_pause(&app);
     Ok(())
+}
+
+/// Небольшой PNG-значок из манифеста передаётся в WebView как data URL.
+fn icon_data_url(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let mime = match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "svg" => "image/svg+xml",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+    Some(format!("data:{mime};base64,{}", base64(&bytes)))
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(ALPHABET[(first >> 2) as usize] as char);
+        output.push(ALPHABET[(((first & 0b11) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[(((second & 0b1111) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(third & 0b11_1111) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
 }
 
 #[tauri::command]
@@ -866,20 +1129,25 @@ fn register_failure_message(error: RegisterFailure) -> String {
 
 #[tauri::command]
 fn get_status(app: AppHandle) -> Result<StatusPayload, String> {
-    let directory = module_directory(&app)?;
-    let manifest_path = directory.join("manifest.json");
-    let manifest = Manifest::load(&manifest_path)
-        .map_err(|error| format!("манифест {}: {error}", manifest_path.display()))?;
-    let action = manifest
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    let entry = state
+        .catalog
+        .registry
+        .module(CONTROL_MODULE_ID)
+        .ok_or_else(|| format!("пакет {CONTROL_MODULE_ID} не установлен"))?;
+    let action = entry
+        .manifest
         .action(CONTROL_ACTION_ID)
         .ok_or_else(|| format!("в манифесте нет действия {CONTROL_ACTION_ID}"))?;
     let config_path = state_path(&app)
         .map(|path| path.display().to_string())
         .unwrap_or_default();
     Ok(StatusPayload {
-        module_id: manifest.id.clone(),
-        module_name: manifest.name.clone(),
-        module_version: manifest.version.clone(),
+        module_id: entry.manifest.id.clone(),
+        module_name: entry.manifest.name.clone(),
+        module_version: entry.manifest.version.clone(),
         action_id: action.id.clone(),
         action_name: action.name.clone(),
         shortcut: app
@@ -892,23 +1160,32 @@ fn get_status(app: AppHandle) -> Result<StatusPayload, String> {
             .unwrap_or_else(|| "неизвестно".to_owned()),
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
         build_kind: logging::build_kind().to_owned(),
-        module_path: directory.display().to_string(),
+        module_path: entry
+            .executable
+            .parent()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         log_path: logging::log_path(),
         config_path,
     })
 }
 
-#[tauri::command]
-async fn invoke_control(app: AppHandle, source: Option<String>) -> Result<LastResult, String> {
+async fn invoke_target(
+    app: &AppHandle,
+    target: ActionRef,
+    source: Option<String>,
+) -> Result<LastResult, String> {
     let parsed = match source.as_deref() {
         Some("hotkey") => InvocationSource::Hotkey,
         _ => InvocationSource::Tray,
     };
     let handle = app.clone();
+    let call_target = target.clone();
     let started = Instant::now();
-    let outcome = tauri::async_runtime::spawn_blocking(move || run_control_action(&handle, parsed))
-        .await
-        .map_err(|error| format!("задача вызова прервана: {error}"))??;
+    let outcome =
+        tauri::async_runtime::spawn_blocking(move || invoke_action(&handle, &call_target, parsed))
+            .await
+            .map_err(|error| format!("задача вызова прервана: {error}"))??;
     let last = LastResult {
         message: outcome.message.clone(),
         action_name: outcome.action_name.clone(),
@@ -923,6 +1200,21 @@ async fn invoke_control(app: AppHandle, source: Option<String>) -> Result<LastRe
         }
     }
     Ok(last)
+}
+
+#[tauri::command]
+async fn invoke_control(app: AppHandle, source: Option<String>) -> Result<LastResult, String> {
+    invoke_target(&app, control_action_ref(), source).await
+}
+
+#[tauri::command]
+async fn invoke_plugin_action(
+    app: AppHandle,
+    module_id: String,
+    action_id: String,
+    source: Option<String>,
+) -> Result<LastResult, String> {
+    invoke_target(&app, ActionRef::new(module_id, action_id), source).await
 }
 
 #[tauri::command]
@@ -1057,6 +1349,9 @@ fn quit_application(app: &AppHandle) {
             .expect("служба сочетаний")
             .unregister(HOTKEY_ID);
     }
+    if let Some(state) = app.try_state::<AppState>() {
+        state.catalog.registry.cancel_all();
+    }
     terminate_module_processes();
     app.exit(0);
 }
@@ -1138,4 +1433,131 @@ fn mark_and_check_first_run(app: &AppHandle) -> Result<bool, String> {
             .map_err(|error| format!("запись {}: {error}", path.display()))?;
     }
     Ok(first_run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_directory(name: &str) -> PathBuf {
+        let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let directory = std::env::temp_dir().join(format!(
+            "util-maker-desktop-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("каталог теста");
+        directory
+    }
+
+    fn write_module(
+        root: &Path,
+        id: &str,
+        name: &str,
+        action_id: &str,
+        action_name: &str,
+        marker: Option<&Path>,
+    ) -> PathBuf {
+        let directory = root.join(id);
+        std::fs::create_dir_all(&directory).expect("каталог модуля");
+        let manifest = format!(
+            r#"{{
+              "manifestVersion": 1,
+              "id": "{id}",
+              "publisher": "org.test",
+              "name": "{name}",
+              "version": "1.0.0",
+              "hostApi": ">=1.0.0 <2.0.0",
+              "entrypoints": {{ "linux-x64": "module" }},
+              "icon": "icon.png",
+              "capabilities": [],
+              "actions": [{{ "id": "{action_id}", "name": "{action_name}", "recommendedHotkeys": ["Ctrl+Alt+1"] }}]
+            }}"#
+        );
+        std::fs::write(directory.join("manifest.json"), manifest).expect("манифест");
+        std::fs::write(directory.join("icon.png"), [0x89, b'P', b'N', b'G']).expect("иконка");
+        let executable = directory.join("module");
+        let script = match marker {
+            Some(marker) => format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+            None => "#!/bin/sh\nexit 0\n".to_owned(),
+        };
+        std::fs::write(&executable, script).expect("точка входа");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&executable).expect("файл").permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("права");
+        }
+        executable
+    }
+
+    #[test]
+    fn catalog_reads_two_manifests_without_starting_processes() {
+        let root = temp_directory("catalog");
+        let marker = root.join("spawned");
+        write_module(
+            &root,
+            "org.test.one",
+            "Первый",
+            "run",
+            "Запустить",
+            Some(&marker),
+        );
+        write_module(&root, "org.test.two", "Второй", "ping", "Проверить", None);
+
+        let (entries, errors) = discover_modules(&root, "linux-x64").expect("каталог");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(entries.len(), 2);
+        assert!(!marker.exists(), "чтение каталога запустило процесс");
+
+        let registry = Registry::new();
+        registry.replace_packages(entries).expect("реестр");
+        let actions = registry.actions();
+        assert_eq!(actions.len(), 2);
+        assert!(actions.iter().any(|action| {
+            action.module_id == "org.test.one"
+                && action.action_id == "run"
+                && action.module_version == "1.0.0"
+        }));
+        assert!(!marker.exists(), "построение меню запустило процесс");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn disabled_manifest_disappears_from_action_list() {
+        let root = temp_directory("disabled");
+        write_module(&root, "org.test.one", "Первый", "run", "Запустить", None);
+        write_module(&root, "org.test.two", "Второй", "ping", "Проверить", None);
+        let (entries, errors) = discover_modules(&root, "linux-x64").expect("каталог");
+        assert!(errors.is_empty(), "{errors:?}");
+        let registry = Registry::new();
+        registry.replace_packages(entries).expect("реестр");
+        registry
+            .set_enabled("org.test.one", false)
+            .expect("отключение");
+        let actions = registry.actions();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].module_id, "org.test.two");
+        assert!(!registry.module("org.test.one").expect("модуль").enabled);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn data_url_and_base64_keep_manifest_icon() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"Ma"), "TWE=");
+        assert_eq!(base64(b"M"), "TQ==");
+        let root = temp_directory("icon");
+        let icon = root.join("icon.png");
+        std::fs::write(&icon, [0x89, b'P', b'N', b'G']).expect("иконка");
+        let url = icon_data_url(&icon).expect("data URL");
+        assert!(url.starts_with("data:image/png;base64,"));
+        assert_eq!(url, "data:image/png;base64,iVBORw==");
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

@@ -66,6 +66,8 @@
       }
       .plugin-row:last-child { border-bottom: none; }
       .plugin-name { font-weight: 600; }
+      .plugin-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .plugin-icon { width: 34px; height: 34px; border-radius: 8px; object-fit: contain; flex: none; }
       .badge {
         display: inline-block;
         padding: 2px 9px;
@@ -246,19 +248,34 @@
 
       function renderPlugins() {
         elements.list.innerHTML = "";
+        if (plugins.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "hint";
+          empty.textContent = "Установленные пакеты не найдены. Проверьте каталог modules рядом с приложением.";
+          elements.list.append(empty);
+          return;
+        }
         for (const plugin of plugins) {
           const row = document.createElement("div");
           row.className = "plugin-row";
           const info = document.createElement("div");
+          info.className = "plugin-info";
+          if (plugin.icon) {
+            const icon = document.createElement("img");
+            icon.className = "plugin-icon";
+            icon.src = plugin.icon;
+            icon.alt = "";
+            info.append(icon);
+          }
+          const text = document.createElement("div");
           const name = document.createElement("div");
           name.className = "plugin-name";
           name.textContent = plugin.name;
           const meta = document.createElement("div");
           meta.className = "hint";
-          meta.textContent = plugin.installed
-            ? `${plugin.publisher} · версия ${plugin.version}`
-            : "Пакет не установлен";
-          info.append(name, meta);
+          meta.textContent = `${plugin.publisher} · версия ${plugin.version}`;
+          text.append(name, meta);
+          info.append(text);
           const right = document.createElement("div");
           right.style.display = "flex";
           right.style.gap = "10px";
@@ -316,11 +333,15 @@
         run.className = "primary";
         run.textContent = "Вызвать";
         run.addEventListener("click", () => invokeAction(plugin, action));
-        const edit = document.createElement("button");
-        edit.type = "button";
-        edit.textContent = "Изменить сочетание";
-        edit.addEventListener("click", () => openHotkey(plugin, action));
-        right.append(run, edit);
+        if (plugin.id === "org.utilmaker.control") {
+          const edit = document.createElement("button");
+          edit.type = "button";
+          edit.textContent = "Изменить сочетание";
+          edit.addEventListener("click", () => openHotkey(plugin, action));
+          right.append(run, edit);
+        } else {
+          right.append(run);
+        }
         top.append(text, right);
         card.append(top);
         return card;
@@ -350,7 +371,12 @@
           renderPlugins();
           if (currentPlugin) {
             const refreshed = plugins.find((plugin) => plugin.id === currentPlugin.id);
-            if (refreshed) openPlugin(refreshed);
+            if (refreshed) {
+              openPlugin(refreshed);
+            } else {
+              currentPlugin = null;
+              elements.detail.hidden = true;
+            }
           }
         } catch (error) {
           elements.list.textContent = `Не удалось прочитать микроприложения: ${error}`;
@@ -360,7 +386,11 @@
       async function invokeAction(plugin, action) {
         showResult("Выполняется вызов отдельного процесса…", "");
         try {
-          const result = await invoke("invoke_control", { source: "settings" });
+          const result = await invoke("invoke_plugin_action", {
+            moduleId: plugin.id,
+            actionId: action.id,
+            source: "settings",
+          });
           showResult(
             `${result.message}\nЯдро: ${result.coreElapsedMs} мс, от нажатия до результата: ${result.sinceEventMs} мс.`,
             result.status === "ok" ? "ok" : "error"

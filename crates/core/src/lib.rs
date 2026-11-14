@@ -4,6 +4,7 @@
 //! на Ubuntu и используется нативным хостом на границе приложения.
 
 pub mod error;
+pub mod hotkeys;
 pub mod ipc;
 pub mod registry;
 

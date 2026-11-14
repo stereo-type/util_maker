@@ -8,6 +8,7 @@
 //! уничтожаются при закрытии; без окон процесс остаётся в трее.
 
 mod logging;
+mod package_manager;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use package_manager::PackageManager;
 use serde::{Deserialize, Serialize};
 use tauri::{
     image::Image,
@@ -47,6 +49,7 @@ struct AppState {
     catalog: CatalogState,
     tray_actions: Mutex<BTreeMap<String, ActionRef>>,
     metrics: Mutex<DiagnosticsLog>,
+    packages: Mutex<PackageManager>,
 }
 
 /// Каталог установленных модулей и реестр ядра.
@@ -462,6 +465,10 @@ fn main() {
             assign_hotkey,
             set_hotkey_save_failure,
             plugins,
+            preview_package,
+            install_package,
+            rollback_package,
+            remove_package,
             set_plugin_enabled,
             change_control_shortcut,
             quit_app
@@ -469,11 +476,18 @@ fn main() {
         .setup(|app| {
             let metrics = DiagnosticsLog::open(&logging::log_directory(), 1_000_000)
                 .map_err(|error| format!("журнал метрик: {error}"))?;
+            let catalog = CatalogState::open(app.handle())?;
+            let data_directory = app
+                .path()
+                .app_local_data_dir()
+                .map_err(|error| format!("каталог данных: {error}"))?;
+            let packages = PackageManager::open(&data_directory, catalog.root.clone())?;
             let state = AppState {
                 last_result: Mutex::new(None),
-                catalog: CatalogState::open(app.handle())?,
+                catalog,
                 tray_actions: Mutex::new(BTreeMap::new()),
                 metrics: Mutex::new(metrics),
+                packages: Mutex::new(packages),
             };
             app.manage(state);
             let (runtime, events) = ShortcutRuntime::start(app.handle())?;
@@ -1087,6 +1101,69 @@ fn refresh_plugins_inner(app: &AppHandle) -> Vec<PluginDto> {
         logging::write(&format!("меню трея: {error}"));
     }
     collect_plugins(app)
+}
+
+#[tauri::command]
+fn preview_package(
+    app: AppHandle,
+    package_path: String,
+    publisher: String,
+    key_hex: String,
+) -> Result<util_maker_packages::PackagePreview, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "менеджер пакетов не готов".to_owned())?;
+    let mut manager = state.packages.lock().map_err(|error| error.to_string())?;
+    manager
+        .preview(Path::new(&package_path), &publisher, &key_hex)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn install_package(
+    app: AppHandle,
+    package_path: String,
+    publisher: String,
+    key_hex: String,
+) -> Result<util_maker_packages::InstalledModule, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "менеджер пакетов не готов".to_owned())?;
+    let mut manager = state.packages.lock().map_err(|error| error.to_string())?;
+    let installed = manager
+        .install(Path::new(&package_path), &publisher, &key_hex)
+        .map_err(|error| error.to_string())?;
+    drop(manager);
+    let _ = refresh_plugins_inner(&app);
+    Ok(installed)
+}
+
+#[tauri::command]
+fn rollback_package(app: AppHandle, plugin_id: String) -> Result<String, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "менеджер пакетов не готов".to_owned())?;
+    let mut manager = state.packages.lock().map_err(|error| error.to_string())?;
+    let installed = manager
+        .rollback(&plugin_id)
+        .map_err(|error| error.to_string())?;
+    drop(manager);
+    let _ = refresh_plugins_inner(&app);
+    Ok(installed.version)
+}
+
+#[tauri::command]
+fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "менеджер пакетов не готов".to_owned())?;
+    let mut manager = state.packages.lock().map_err(|error| error.to_string())?;
+    let removed = manager
+        .remove(&plugin_id)
+        .map_err(|error| error.to_string())?;
+    drop(manager);
+    let _ = refresh_plugins_inner(&app);
+    Ok(removed)
 }
 
 #[tauri::command]

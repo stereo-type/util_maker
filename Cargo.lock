@@ -4693,12 +4693,14 @@ dependencies = [
 name = "util-maker-desktop"
 version = "0.4.3"
 dependencies = [
+ "semver",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
  "util-maker-core",
+ "util-maker-packages",
  "util-maker-platform",
  "util-maker-sdk",
 ]

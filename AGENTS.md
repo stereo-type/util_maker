@@ -1,6 +1,6 @@
 # Работа над Util Maker
 
-При первом входе прочитай [общее ТЗ](docs/specification.md), [правила проекта](docs/development-guide.md) и [правила задач](docs/task-workflow.md). Подробности по компоненту найди в [карте блоков](docs/blocks/README.md).
+При первом входе прочитай [общее ТЗ](docs/specification.md), [правила проекта](docs/development-guide.md), [правила задач](docs/task-workflow.md) и [стиль интерфейса](docs/ui-style-guide.md). Подробности по компоненту найди в [карте блоков](docs/blocks/README.md).
 
 1. На Ubuntu из корня checkout выполни `make dev-setup`. Требуются GNU Make, доступ к Linux Docker Engine и сеть для первой загрузки зависимостей. Репозиторий должен быть доступен Docker по пути checkout для bind mount.
 2. Работай с примонтированными исходниками через `make dev-shell` или `make dev-run CMD="cargo --version"`. Повторяемые команды оформляй отдельными целями Makefile. Файлы создаются с UID/GID пользователя. Cargo и npm используют кэш рабочего каталога.

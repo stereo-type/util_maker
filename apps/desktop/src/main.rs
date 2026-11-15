@@ -1205,7 +1205,7 @@ impl PlatformHost for DesktopPlatform {
 
     fn settings_read(
         &mut self,
-        _context: &util_maker_core::CallSession,
+        context: &util_maker_core::CallSession,
         _params: &serde_json::Value,
     ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
         let directory = self
@@ -1213,7 +1213,7 @@ impl PlatformHost for DesktopPlatform {
             .parent()
             .map(|parent| parent.join("plugin-settings"))
             .unwrap_or_else(|| PathBuf::from("plugin-settings"));
-        let path = directory.join("org.utilmaker.translator.json");
+        let path = directory.join(format!("{}.json", context.module_id));
         if !path.exists() {
             return Ok(serde_json::json!({}));
         }
@@ -1225,7 +1225,7 @@ impl PlatformHost for DesktopPlatform {
 
     fn secret_read(
         &mut self,
-        _context: &util_maker_core::CallSession,
+        context: &util_maker_core::CallSession,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
         let profile = params
@@ -1240,7 +1240,7 @@ impl PlatformHost for DesktopPlatform {
             .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
         let value = store
             .get(&util_maker_platform::SecretKey::new(
-                "org.utilmaker.translator",
+                &context.module_id,
                 profile,
                 name,
             ))

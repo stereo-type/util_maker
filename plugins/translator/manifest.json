@@ -19,5 +19,79 @@
         "Ctrl+Shift+T"
       ]
     }
-  ]
+  ],
+  "settings": {
+    "schemaVersion": 1,
+    "fields": [
+      {
+        "id": "activeProfile",
+        "label": "Сервис перевода",
+        "type": "select",
+        "default": "yandex",
+        "options": [
+          {
+            "value": "yandex",
+            "label": "Яндекс"
+          },
+          {
+            "value": "google",
+            "label": "Google"
+          }
+        ]
+      },
+      {
+        "id": "sourceLang",
+        "label": "Исходный язык",
+        "type": "select",
+        "default": "auto",
+        "options": [
+          {
+            "value": "auto",
+            "label": "Определить автоматически"
+          },
+          {
+            "value": "en",
+            "label": "Английский"
+          },
+          {
+            "value": "ru",
+            "label": "Русский"
+          },
+          {
+            "value": "de",
+            "label": "Немецкий"
+          }
+        ]
+      },
+      {
+        "id": "targetLang",
+        "label": "Целевой язык",
+        "type": "text",
+        "default": "ru",
+        "required": true
+      },
+      {
+        "id": "yandexApiKey",
+        "label": "Ключ Яндекса",
+        "type": "secret",
+        "secretRef": "translator/yandex/apiKey"
+      },
+      {
+        "id": "googleApiKey",
+        "label": "Ключ Google",
+        "type": "secret",
+        "secretRef": "translator/google/apiKey"
+      }
+    ],
+    "commands": [
+      {
+        "id": "testConnection",
+        "name": "Проверить подключение",
+        "fields": [
+          "yandexApiKey",
+          "googleApiKey"
+        ]
+      }
+    ]
+  }
 }

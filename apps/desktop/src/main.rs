@@ -1049,14 +1049,18 @@ fn show_result(app: &AppHandle, result: LastResult) {
         let _ = window.set_focus();
         return;
     }
-    let builder =
+    let mut builder =
         WebviewWindowBuilder::new(app, RESULT_WINDOW, WebviewUrl::App("result.html".into()))
             .title("Util Maker — результат")
             .inner_size(520.0, 320.0)
             .min_inner_size(420.0, 260.0)
             .resizable(false)
-            .always_on_top(true)
-            .center();
+            .always_on_top(true);
+    if let Some((x, y)) = util_maker_platform::cursor_position() {
+        builder = builder.position(x as f64 + 18.0, y as f64 + 18.0);
+    } else {
+        builder = builder.center();
+    }
     match builder.build() {
         Ok(_) => logging::write("окно результата открыто"),
         Err(error) => logging::write(&format!("не удалось показать результат: {error}")),

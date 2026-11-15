@@ -161,6 +161,22 @@ pub(crate) fn dormant_events() -> std::sync::mpsc::Receiver<HotkeyEvent> {
     receiver
 }
 
+/// Позиция курсора в физических пикселях виртуального рабочего стола.
+#[cfg(windows)]
+pub fn cursor_position() -> Option<(i32, i32)> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT::default();
+    unsafe { GetCursorPos(&mut point).ok()? };
+    Some((point.x, point.y))
+}
+
+/// Позиция курсора в физических пикселях виртуального рабочего стола.
+#[cfg(not(windows))]
+pub fn cursor_position() -> Option<(i32, i32)> {
+    None
+}
+
 /// Поднимает окно на передний план в Windows. На других ОС — no-op.
 #[cfg(windows)]
 pub fn focus_window(handle: isize) {

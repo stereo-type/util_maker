@@ -491,7 +491,11 @@
           form.append(label);
           inputs.set(field.id, { input, field });
           if (field.type === "secret") {
-            const profile = values.activeProfile || schema.profiles?.[0]?.id || "default";
+            const reference = field.secretRef || "";
+            const referenceProfile = reference.split("/")[1];
+            const profile = referenceProfile === "yandex" || referenceProfile === "google"
+              ? referenceProfile
+              : (values.activeProfile || schema.profiles?.[0]?.id || "default");
             const name = field.secretRef || field.id;
             invoke("plugin_secret_present", { pluginId: plugin.id, profile, name })
               .then((present) => {

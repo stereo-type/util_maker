@@ -96,6 +96,7 @@ makensis -V2 \
     -DMODULE_MANIFEST="$manifest" \
     -DMODULE_ICON=/workspace/plugins/control/assets/icon.png \
     -DPACKAGE_DIR="$package_dir" \
+    -DSCRIPTS_DIR=/workspace/scripts \
     -DREADME_FILE=/workspace/installer/README.txt \
     -DOUT_FILE="$out" \
     /workspace/installer/util-maker.nsi

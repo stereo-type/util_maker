@@ -9,6 +9,7 @@
 ;   MODULE_MANIFEST  — manifest.json контрольного модуля
 ;   MODULE_ICON      — иконка модуля из assets
 ;   PACKAGE_DIR      — подписанные .umpkg и открытый ключ издателя
+;   SCRIPTS_DIR      — measure-windows.ps1 и kill-plugin.ps1
 ;   README_FILE      — краткая инструкция
 ;   OUT_FILE         — путь к итоговому .exe
 ;   VERSION          — версия продукта
@@ -18,7 +19,7 @@ Unicode true
 !include "MUI2.nsh"
 
 !ifndef VERSION
-    !define VERSION "0.4.5"
+    !define VERSION "0.4.6"
 !endif
 !ifndef BUILD_KIND
     !define BUILD_KIND "dev"
@@ -37,6 +38,9 @@ Unicode true
 !endif
 !ifndef PACKAGE_DIR
     !error "Не задан PACKAGE_DIR"
+!endif
+!ifndef SCRIPTS_DIR
+    !error "Не задан SCRIPTS_DIR"
 !endif
 !ifndef README_FILE
     !error "Не задан README_FILE"
@@ -111,6 +115,10 @@ previous_removed:
     File "${PACKAGE_DIR}\*.umpkg"
     File "${PACKAGE_DIR}\keys\org.utilmaker-public.json"
 
+    SetOutPath "$INSTDIR\scripts"
+    File "${SCRIPTS_DIR}\measure-windows.ps1"
+    File "${SCRIPTS_DIR}\kill-plugin.ps1"
+
     SetOutPath "$INSTDIR"
     CreateShortCut "$DESKTOP\Util Maker.lnk" "$INSTDIR\util-maker-desktop.exe"
     CreateDirectory "$SMPROGRAMS\Util Maker"
@@ -151,6 +159,9 @@ Section "Uninstall"
     Delete "$INSTDIR\packages\*.umpkg"
     Delete "$INSTDIR\packages\org.utilmaker-public.json"
     RMDir "$INSTDIR\packages"
+    Delete "$INSTDIR\scripts\measure-windows.ps1"
+    Delete "$INSTDIR\scripts\kill-plugin.ps1"
+    RMDir "$INSTDIR\scripts"
     RMDir "$INSTDIR\modules"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"

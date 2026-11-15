@@ -23,7 +23,7 @@ use tauri::{
     image::Image,
     menu::{IconMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
 use util_maker_core::diagnostics::{DiagnosticsLog, LogEntry};
 use util_maker_core::hotkeys::{
@@ -784,6 +784,7 @@ fn main() {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BundledPublicKey {
     publisher: String,
     public_key: String,
@@ -1272,17 +1273,22 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.close();
     }
-    let builder = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
+    let window = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
         .title("Снять область")
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .position(rect.x as f64, rect.y as f64)
-        .inner_size(rect.width as f64, rect.height as f64);
-    builder
+        .visible(false)
         .build()
         .map_err(|error| format!("overlay: {error}"))?;
+    window
+        .set_position(PhysicalPosition::new(rect.x, rect.y))
+        .map_err(|error| format!("overlay position: {error}"))?;
+    window
+        .set_size(PhysicalSize::new(rect.width, rect.height))
+        .map_err(|error| format!("overlay size: {error}"))?;
+    let _ = window.show();
     Ok(())
 }
 
@@ -1314,6 +1320,18 @@ fn invoke_action(
             &mut host,
         )
         .map_err(|failure| failure.message)
+}
+
+fn outcome_status(outcome: &InvokeOutcome) -> &'static str {
+    let kind = outcome
+        .data
+        .as_ref()
+        .and_then(|value| value.get("outcome"))
+        .and_then(|value| value.as_str());
+    match kind {
+        Some("blocked" | "missing-key" | "awaiting-selection" | "manual-input") => "warning",
+        _ => "ok",
+    }
 }
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
@@ -1372,7 +1390,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                     source: source.as_str().to_owned(),
                     core_elapsed_ms: outcome.elapsed.as_millis(),
                     since_event_ms: since_event.as_millis(),
-                    status: "ok".to_owned(),
+                    status: outcome_status(&outcome).to_owned(),
                 },
             );
             let first_frame = started.elapsed().as_millis() as u64;
@@ -2375,7 +2393,7 @@ async fn invoke_target(
         source: source.unwrap_or_else(|| "settings".to_owned()),
         core_elapsed_ms: outcome.elapsed.as_millis(),
         since_event_ms: started.elapsed().as_millis(),
-        status: format!("{:?}", outcome.status).to_lowercase(),
+        status: outcome_status(&outcome).to_owned(),
     };
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut slot) = state.last_result.lock() {

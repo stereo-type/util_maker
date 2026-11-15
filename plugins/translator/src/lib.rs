@@ -7,8 +7,9 @@
 pub mod service;
 
 pub use service::{
-    check_active_profile, translate_from_source, TranslationOutcome, CLIPBOARD_CAPABILITY,
-    SECRET_CAPABILITY, SELECTION_CAPABILITY, SELECTION_TIMEOUT, SETTINGS_CAPABILITY,
+    translate_from_source, ProviderFailure, ProviderRef, TranslationOutcome, CLIPBOARD_CAPABILITY,
+    CONTRACT, CONTRACT_VERSION, OPERATION, POINT_ID, SELECTION_CAPABILITY, SELECTION_TIMEOUT,
+    SETTINGS_CAPABILITY,
 };
 
 /// Снимок исходного элемента в момент вызова.

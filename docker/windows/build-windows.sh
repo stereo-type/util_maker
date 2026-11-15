@@ -42,15 +42,17 @@ fi
 echo "Util Maker $version: сборка x86_64-pc-windows-msvc, тип $build_kind"
 cargo xwin build --release --target x86_64-pc-windows-msvc \
     -p util-maker-desktop -p util-maker-control-module -p util-maker-screenshots -p util-maker-translator \
-    -p util-maker-color-picker \
+    -p util-maker-color-picker -p util-maker-translator-yandex -p util-maker-translator-google \
     --bin util-maker-desktop --bin control-module --bin screenshot-plugin --bin translator-module \
-    --bin color-picker-module
+    --bin color-picker-module --bin translator-yandex --bin translator-google
 
 exe="$target_dir/x86_64-pc-windows-msvc/release/util-maker-desktop.exe"
 module="$target_dir/x86_64-pc-windows-msvc/release/control-module.exe"
 screenshot_module="$target_dir/x86_64-pc-windows-msvc/release/screenshot-plugin.exe"
 translator_module="$target_dir/x86_64-pc-windows-msvc/release/translator-module.exe"
 color_picker_module="$target_dir/x86_64-pc-windows-msvc/release/color-picker-module.exe"
+yandex_module="$target_dir/x86_64-pc-windows-msvc/release/translator-yandex.exe"
+google_module="$target_dir/x86_64-pc-windows-msvc/release/translator-google.exe"
 manifest="/workspace/plugins/control/manifest.json"
 screenshot_manifest="/workspace/plugins/screenshot/manifest.json"
 screenshot_icon="/workspace/plugins/screenshot/assets/icon.png"
@@ -58,8 +60,11 @@ translator_manifest="/workspace/plugins/translator/manifest.json"
 translator_icon="/workspace/plugins/translator/assets/icon.png"
 color_picker_manifest="/workspace/plugins/color-picker/manifest.json"
 color_picker_icon="/workspace/plugins/color-picker/assets/icon.png"
+yandex_manifest="/workspace/plugins/translator/providers/yandex/manifest.json"
+google_manifest="/workspace/plugins/translator/providers/google/manifest.json"
 
-for file in "$exe" "$module" "$manifest" "$screenshot_module" "$screenshot_manifest" "$screenshot_icon" "$translator_module" "$translator_manifest" "$translator_icon" "$color_picker_module" "$color_picker_manifest"; do
+for file in "$exe" "$module" "$manifest" "$screenshot_module" "$screenshot_manifest" "$screenshot_icon" "$translator_module" "$translator_manifest" "$translator_icon" "$color_picker_module" "$color_picker_manifest" \
+        "$yandex_module" "$yandex_manifest" "$google_module" "$google_manifest"; do
     if [ ! -f "$file" ]; then
         echo "Не найден обязательный файл сборки: $file" >&2
         exit 1
@@ -110,7 +115,8 @@ package_plugin() {
 
 package_plugin org.utilmaker.screenshot "$screenshot_module" "$screenshot_manifest" "$screenshot_icon"
 package_plugin org.utilmaker.translator "$translator_module" "$translator_manifest" "$translator_icon"
-package_plugin org.utilmaker.color-picker "$color_picker_module" "$color_picker_manifest" "$color_picker_icon"
+package_plugin org.utilmaker.color-picker "$color_picker_module" "$color_picker_manifest" \
+        "$yandex_module" "$yandex_manifest" "$google_module" "$google_manifest" "$color_picker_icon"
 
 rm -rf "$package_dir/staging"
 

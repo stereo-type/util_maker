@@ -1,20 +1,16 @@
 //! Исполняемый процесс плагина «Переводчик».
 //!
-//! На этой ревизии процесс закрывает границу IPC: подтверждает ID модуля,
-//! принимает действие `translate` и использует переносимый
-//! [`SelectionController`]. Получение выделения через UI Automation и окно
-//! результата подключаются отдельной задачей, поэтому текущий снимок источника
-//! явно сообщает о потере контекста и не отправляет HTTP-запросов.
+//! Процесс отвечает за выделение, языки и показ результата. HTTP-запросы
+//! выполняет активный провайдер-плагин, которого переводчик вызывает через
+//! контракт `util-maker.translation.provider`.
 
 use serde_json::{json, Value};
-use util_maker_providers::ReqwestTransport;
 use util_maker_sdk::{
-    error_codes, run_stdio, FormCommandRequest, FormCommandResult, FormFieldError, HostBridge,
-    HostCallError, InvokeRequest, InvokeResult, Module, ModuleInfo, RpcError, HOST_API_VERSION,
+    error_codes, run_stdio, HostBridge, HostCallError, InvokeRequest, InvokeResult, Module,
+    ModuleInfo, RpcError, EXTENSIONS_CALL, EXTENSIONS_READ, HOST_API_VERSION,
 };
 use util_maker_translator::service::{
-    check_active_profile, translate_from_source, CLIPBOARD_CAPABILITY, SECRET_CAPABILITY,
-    SELECTION_CAPABILITY, SETTINGS_CAPABILITY,
+    translate_from_source, CLIPBOARD_CAPABILITY, SELECTION_CAPABILITY, SETTINGS_CAPABILITY,
 };
 use util_maker_translator::{BlockReason, SelectionController, SourceSnapshot, StartOutcome};
 
@@ -31,7 +27,6 @@ const MODULE_VERSION: &str = match option_env!("UTIL_MAKER_MODULE_VERSION") {
 struct TranslatorModule {
     info: ModuleInfo,
     selection: SelectionController,
-    transport: Option<ReqwestTransport>,
 }
 
 impl TranslatorModule {
@@ -44,12 +39,12 @@ impl TranslatorModule {
                 capabilities: &[
                     SELECTION_CAPABILITY,
                     SETTINGS_CAPABILITY,
-                    SECRET_CAPABILITY,
                     CLIPBOARD_CAPABILITY,
+                    EXTENSIONS_READ,
+                    EXTENSIONS_CALL,
                 ],
             },
             selection: SelectionController::new(),
-            transport: ReqwestTransport::new().ok(),
         }
     }
 
@@ -113,7 +108,7 @@ impl Module for TranslatorModule {
             }))),
             StartOutcome::Translate(_) => Err(RpcError::new(
                 error_codes::INTERNAL_ERROR,
-                "процесс переводчика ещё не подключён к профилю провайдера",
+                "вызов перевода требует моста возможностей",
             )),
         }
     }
@@ -129,62 +124,13 @@ impl Module for TranslatorModule {
                 format!("неизвестное действие: {}", request.action_id),
             ));
         }
-        let transport = self.transport.as_ref().ok_or_else(|| {
-            RpcError::new(
-                error_codes::INTERNAL_ERROR,
-                "HTTP-транспорт переводчика недоступен",
-            )
-        })?;
         let manual = request.params.get("manualText").and_then(Value::as_str);
-        match translate_from_source(host, transport, manual) {
+        match translate_from_source(host, manual) {
             Ok(outcome) => Ok(Self::with_result(request, outcome)),
             Err(HostCallError::Cancelled) => Ok(InvokeResult::cancelled()),
             Err(error) if error.rpc_code() == error_codes::CAPABILITY_DENIED => {
                 self.invoke(request)
             }
-            Err(error) => Err(error.into_rpc_error()),
-        }
-    }
-
-    fn command_with_host(
-        &mut self,
-        request: &FormCommandRequest,
-        host: &mut dyn HostBridge,
-    ) -> Result<FormCommandResult, RpcError> {
-        if request.command_id != "testConnection" {
-            return Err(RpcError::new(
-                error_codes::METHOD_NOT_FOUND,
-                format!("неизвестная команда формы: {}", request.command_id),
-            ));
-        }
-        let transport = self.transport.as_ref().ok_or_else(|| {
-            RpcError::new(
-                error_codes::INTERNAL_ERROR,
-                "HTTP-транспорт переводчика недоступен",
-            )
-        })?;
-        match check_active_profile(host, transport) {
-            Ok(Ok(())) => Ok(FormCommandResult {
-                message: Some("Подключение установлено.".to_owned()),
-                data: Some(json!({"connected": true})),
-                field_errors: Vec::new(),
-            }),
-            Ok(Err(error)) => Ok(FormCommandResult {
-                message: Some(error.to_string()),
-                data: Some(json!({
-                    "connected": false,
-                    "reason": error.code(),
-                })),
-                field_errors: vec![FormFieldError {
-                    field_id: "apiKey".to_owned(),
-                    code: error.code().to_owned(),
-                    message: error.to_string(),
-                }],
-            }),
-            Err(HostCallError::Cancelled) => Err(RpcError::new(
-                error_codes::CANCELLED,
-                "проверка подключения отменена",
-            )),
             Err(error) => Err(error.into_rpc_error()),
         }
     }

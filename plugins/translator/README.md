@@ -1,13 +1,14 @@
 # Плагин «Переводчик»
 
 Микроприложение перевода: состояния выбора текста до и после шорткея и
-HTTP-адаптеры Яндекса и Google внутри одного каталога плагина.
+точка расширения для плагинов-провайдеров. HTTP-запросы выполняют отдельные
+пакеты `org.utilmaker.translator.yandex` и `org.utilmaker.translator.google`.
 
 - [`src/lib.rs`](src/lib.rs) — `SelectionController` и адаптеры источника/приёмника.
 - [`src/main.rs`](src/main.rs) — процесс `translator-module` и действие `translate`.
-- [`providers/`](providers/src/lib.rs) — профили, запросы, ошибки и разбор
-  ответов обоих сервисов.
-- Крейты — `util-maker-translator`, `util-maker-providers`.
+- [`service.rs`](src/service.rs) — вызов активного вклада через `extensions.list` и `extension.invoke`.
+- [`providers/`](providers/src/lib.rs) — общий HTTP-код и два крейта-плагина.
+- Крейты — `util-maker-translator`, `util-maker-providers`, `util-maker-translator-yandex`, `util-maker-translator-google`.
 - Манифест — [`manifest.json`](manifest.json).
 
 ## Контракт процесса
@@ -17,7 +18,8 @@ HTTP-адаптеры Яндекса и Google внутри одного кат�
 | ID модуля | `org.utilmaker.translator` |
 | Действие | `translate` — «Перевести текст» |
 | Точки входа | `translator-module.exe` для `windows-x64`, `translator-module` для `linux-x64` |
-| Возможности | пока нет; доступ к выделению добавит задача UI Automation |
+| Возможности | `selection.read`, `settings.read`, `clipboard.write`, `extensions.read`, `extensions.call` |
+| Точка расширения | `translation-provider`, контракт `util-maker.translation.provider` 1.0.0 |
 
 Процесс подтверждает ID на `initialize`, принимает `invoke` через stdin/stdout и
 штатно завершается по `shutdown`. Обработчик использует существующий

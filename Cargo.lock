@@ -4679,6 +4679,23 @@ dependencies = [
  "serde",
  "serde_json",
  "util-maker-platform",
+ "util-maker-sdk",
+]
+
+[[package]]
+name = "util-maker-translator-google"
+version = "0.4.30"
+dependencies = [
+ "serde_json",
+ "util-maker-providers",
+ "util-maker-sdk",
+]
+
+[[package]]
+name = "util-maker-translator-yandex"
+version = "0.4.30"
+dependencies = [
+ "serde_json",
  "util-maker-providers",
  "util-maker-sdk",
 ]

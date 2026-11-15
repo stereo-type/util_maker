@@ -11,6 +11,8 @@ members = [
     "plugins/screenshot",
     "plugins/translator",
     "plugins/translator/providers",
+    "plugins/translator/providers/yandex",
+    "plugins/translator/providers/google",
     "plugins/color-picker",
     "plugins/screen-ocr",
     "plugins/qr-code",

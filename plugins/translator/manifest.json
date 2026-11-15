@@ -4,7 +4,7 @@
   "publisher": "org.utilmaker",
   "name": "Переводчик",
   "version": "0.4.30",
-  "hostApi": ">=1.0.0 <2.0.0",
+  "hostApi": ">=1.1.0 <2.0.0",
   "entrypoints": {
     "windows-x64": "translator-module.exe",
     "linux-x64": "translator-module"
@@ -13,8 +13,9 @@
   "capabilities": [
     "selection.read",
     "settings.read",
-    "secret.read",
-    "clipboard.write"
+    "clipboard.write",
+    "extensions.read",
+    "extensions.call"
   ],
   "actions": [
     {
@@ -26,151 +27,61 @@
       ]
     }
   ],
+  "extensionPoints": [
+    {
+      "id": "translation-provider",
+      "name": "Провайдер перевода",
+      "contract": "util-maker.translation.provider",
+      "contractVersion": "1.0.0",
+      "selection": "single",
+      "required": true
+    }
+  ],
   "settings": {
     "schemaVersion": 1,
-    "profileField": "activeProfile",
     "fields": [
       {
-        "id": "activeProfile",
-        "label": "Активный профиль",
+        "id": "sourceLang",
+        "label": "Исходный язык",
         "type": "select",
-        "default": "yandex",
+        "default": "auto",
         "options": [
           {
-            "value": "yandex",
-            "label": "Яндекс"
+            "value": "auto",
+            "label": "Авто"
           },
           {
-            "value": "google",
-            "label": "Google"
-          }
-        ]
-      }
-    ],
-    "profiles": [
-      {
-        "id": "yandex",
-        "name": "Яндекс",
-        "fields": [
-          {
-            "id": "sourceLang",
-            "label": "Исходный язык",
-            "type": "select",
-            "default": "auto",
-            "options": [
-              {
-                "value": "auto",
-                "label": "Авто"
-              },
-              {
-                "value": "en",
-                "label": "Английский"
-              },
-              {
-                "value": "ru",
-                "label": "Русский"
-              },
-              {
-                "value": "de",
-                "label": "Немецкий"
-              }
-            ]
+            "value": "en",
+            "label": "Английский"
           },
           {
-            "id": "targetLang",
-            "label": "Целевой язык",
-            "type": "select",
-            "default": "ru",
-            "options": [
-              {
-                "value": "en",
-                "label": "Английский"
-              },
-              {
-                "value": "ru",
-                "label": "Русский"
-              },
-              {
-                "value": "de",
-                "label": "Немецкий"
-              }
-            ]
+            "value": "ru",
+            "label": "Русский"
           },
           {
-            "id": "apiKey",
-            "label": "API-ключ",
-            "type": "secret",
-            "required": true,
-            "secretRef": "translator/yandex/apiKey"
+            "value": "de",
+            "label": "Немецкий"
           }
         ]
       },
       {
-        "id": "google",
-        "name": "Google",
-        "fields": [
+        "id": "targetLang",
+        "label": "Целевой язык",
+        "type": "select",
+        "default": "ru",
+        "options": [
           {
-            "id": "sourceLang",
-            "label": "Исходный язык",
-            "type": "select",
-            "default": "auto",
-            "options": [
-              {
-                "value": "auto",
-                "label": "Авто"
-              },
-              {
-                "value": "en",
-                "label": "Английский"
-              },
-              {
-                "value": "ru",
-                "label": "Русский"
-              },
-              {
-                "value": "de",
-                "label": "Немецкий"
-              }
-            ]
+            "value": "en",
+            "label": "Английский"
           },
           {
-            "id": "targetLang",
-            "label": "Целевой язык",
-            "type": "select",
-            "default": "ru",
-            "options": [
-              {
-                "value": "en",
-                "label": "Английский"
-              },
-              {
-                "value": "ru",
-                "label": "Русский"
-              },
-              {
-                "value": "de",
-                "label": "Немецкий"
-              }
-            ]
+            "value": "ru",
+            "label": "Русский"
           },
           {
-            "id": "apiKey",
-            "label": "API-ключ",
-            "type": "secret",
-            "required": true,
-            "secretRef": "translator/google/apiKey"
+            "value": "de",
+            "label": "Немецкий"
           }
-        ]
-      }
-    ],
-    "commands": [
-      {
-        "id": "testConnection",
-        "name": "Проверить подключение",
-        "profileField": "activeProfile",
-        "fields": [
-          "sourceLang",
-          "targetLang"
         ]
       }
     ]

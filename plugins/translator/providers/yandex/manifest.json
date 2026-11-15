@@ -1,0 +1,48 @@
+{
+  "manifestVersion": 1,
+  "id": "org.utilmaker.translator.yandex",
+  "publisher": "org.utilmaker",
+  "name": "Яндекс",
+  "version": "0.4.30",
+  "hostApi": ">=1.1.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "translator-yandex.exe",
+    "linux-x64": "translator-yandex"
+  },
+  "capabilities": [
+    "settings.read",
+    "secret.read"
+  ],
+  "actions": [],
+  "provides": [
+    {
+      "moduleId": "org.utilmaker.translator",
+      "pointId": "translation-provider",
+      "contract": "util-maker.translation.provider",
+      "interfaceVersion": ">=1.0.0 <2.0.0",
+      "name": "Яндекс",
+      "description": "Yandex Translate API v2"
+    }
+  ],
+  "settings": {
+    "schemaVersion": 1,
+    "fields": [
+      {
+        "id": "apiKey",
+        "label": "API-ключ",
+        "type": "secret",
+        "required": true,
+        "secretRef": "translator/yandex/apiKey"
+      }
+    ],
+    "commands": [
+      {
+        "id": "testConnection",
+        "name": "Проверить подключение",
+        "fields": [
+          "apiKey"
+        ]
+      }
+    ]
+  }
+}

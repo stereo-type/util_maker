@@ -58,6 +58,7 @@ help:
 		'make icons  — пересоздать иконки приложения, статусов и микроприложений (Pillow)' \
 		'make screenshot-check  — процесс, редактор и манифест плагина «Скриншоты»' \
 		'make color-picker-check  — выборка, лупа, копирование и граница процесса пипетки' \
+		'make translator-provider-check  — переводчик и пакеты провайдеров' \
 		'make color-picker-reference  — пересоздать эталон пипетки' \
 		'make color-picker-package  — подписанный пакет пипетки и проверка обновления' \
 		'make screen-ocr-check  — обрезка, Tesseract, эталон и процесс OCR' \
@@ -148,6 +149,9 @@ icons:
 
 screenshot-check: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-screenshots && cargo test -p util-maker-core --test screenshot_module"
+
+translator-provider-check: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo test -p util-maker-translator -p util-maker-providers -p util-maker-translator-yandex -p util-maker-translator-google"
 
 color-picker-check: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-color-picker && cargo test -p util-maker-core --test color_picker_module"

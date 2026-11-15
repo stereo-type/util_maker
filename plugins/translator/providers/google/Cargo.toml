@@ -1,0 +1,17 @@
+[package]
+name = "util-maker-translator-google"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Плагин-расширение переводчика: Google"
+
+[[bin]]
+name = "translator-google"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+util-maker-providers = { path = ".." }
+util-maker-sdk.workspace = true

@@ -100,6 +100,14 @@ pub enum HostCallError {
     Shutdown,
     #[error("ошибка протокола обращения к хосту: {0}")]
     Protocol(String),
+    /// Хост вернул JSON-RPC-ошибку, которую нельзя свести к отказу или
+    /// отмене. Код и данные сохраняются для машинной обработки.
+    #[error("хост вернул ошибку {code}: {message}")]
+    Remote {
+        code: i64,
+        message: String,
+        data: Option<String>,
+    },
 }
 
 impl HostCallError {
@@ -110,11 +118,25 @@ impl HostCallError {
             Self::Cancelled => error_codes::CANCELLED,
             Self::Shutdown => error_codes::CANCELLED,
             Self::Protocol(_) => error_codes::INTERNAL_ERROR,
+            Self::Remote { code, .. } => *code,
         }
     }
 
     pub fn into_rpc_error(self) -> RpcError {
-        RpcError::new(self.rpc_code(), self.to_string())
+        match self {
+            Self::Remote {
+                code,
+                message,
+                data,
+            } => {
+                let error = RpcError::new(code, message);
+                match data.and_then(|value| serde_json::from_str(&value).ok()) {
+                    Some(value) => error.with_data(value),
+                    None => error,
+                }
+            }
+            other => RpcError::new(other.rpc_code(), other.to_string()),
+        }
     }
 }
 

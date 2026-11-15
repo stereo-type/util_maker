@@ -286,7 +286,11 @@ impl<W: Write> HostBridge for StdioHostBridge<'_, W> {
                     error_codes::CAPABILITY_DENIED => HostCallError::Denied(message),
                     error_codes::CONTEXT_LOST => HostCallError::ContextLost(message),
                     error_codes::CANCELLED => HostCallError::Cancelled,
-                    _ => HostCallError::Protocol(format!("{message} (код {code})")),
+                    _ => HostCallError::Remote {
+                        code,
+                        message,
+                        data: error.get("data").map(ToString::to_string),
+                    },
                 });
             }
             return Ok(value.get("result").cloned().unwrap_or(Value::Null));

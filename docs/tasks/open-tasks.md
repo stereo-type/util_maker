@@ -11,6 +11,9 @@
 | [Переводчик](blocks/plugins/translator/README.md) | Не сделано | 2 |
 | [SDK и протокол](blocks/sdk/README.md) | Не сделано | 2 |
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | Не сделано | 1 |
-| [Текст с экрана](blocks/plugins/screen-ocr/README.md) | Не сделано | 4 |
-| [QR-коды](blocks/plugins/qr-code/README.md) | Не сделано | 5 |
-| [Пипетка цвета](blocks/plugins/color-picker/README.md) | Не сделано | 3 |
+| [Текст с экрана](blocks/plugins/screen-ocr/README.md) | Не сделано | 3 |
+| [Текст с экрана](blocks/plugins/screen-ocr/README.md) | На ревью | 1 |
+| [QR-коды](blocks/plugins/qr-code/README.md) | Не сделано | 4 |
+| [QR-коды](blocks/plugins/qr-code/README.md) | На ревью | 1 |
+| [Пипетка цвета](blocks/plugins/color-picker/README.md) | Не сделано | 2 |
+| [Пипетка цвета](blocks/plugins/color-picker/README.md) | На ревью | 1 |

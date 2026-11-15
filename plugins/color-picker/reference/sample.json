@@ -1,0 +1,134 @@
+{
+  "format": "bgra8",
+  "origin": {
+    "x": -40,
+    "y": -20
+  },
+  "width": 240,
+  "height": 160,
+  "stride": 976,
+  "monitors": [
+    {
+      "x": -40,
+      "y": -20,
+      "width": 240,
+      "height": 160
+    }
+  ],
+  "points": [
+    {
+      "name": "target",
+      "physical": {
+        "x": 0,
+        "y": 0
+      },
+      "image": {
+        "x": 40,
+        "y": 20
+      },
+      "bgra": [
+        237,
+        128,
+        47,
+        255
+      ],
+      "hex": "#2F80ED",
+      "cssRgb": "rgb(47, 128, 237)"
+    },
+    {
+      "name": "right",
+      "physical": {
+        "x": 1,
+        "y": 0
+      },
+      "image": {
+        "x": 41,
+        "y": 20
+      },
+      "bgra": [
+        17,
+        34,
+        51,
+        255
+      ],
+      "hex": "#332211",
+      "cssRgb": "rgb(51, 34, 17)"
+    },
+    {
+      "name": "down",
+      "physical": {
+        "x": 0,
+        "y": 1
+      },
+      "image": {
+        "x": 40,
+        "y": 21
+      },
+      "bgra": [
+        68,
+        85,
+        102,
+        255
+      ],
+      "hex": "#665544",
+      "cssRgb": "rgb(102, 85, 68)"
+    },
+    {
+      "name": "black",
+      "physical": {
+        "x": -40,
+        "y": -20
+      },
+      "image": {
+        "x": 0,
+        "y": 0
+      },
+      "bgra": [
+        0,
+        0,
+        0,
+        255
+      ],
+      "hex": "#000000",
+      "cssRgb": "rgb(0, 0, 0)"
+    },
+    {
+      "name": "white",
+      "physical": {
+        "x": -39,
+        "y": -20
+      },
+      "image": {
+        "x": 1,
+        "y": 0
+      },
+      "bgra": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "hex": "#FFFFFF",
+      "cssRgb": "rgb(255, 255, 255)"
+    },
+    {
+      "name": "alpha-ignored",
+      "physical": {
+        "x": -38,
+        "y": -20
+      },
+      "image": {
+        "x": 2,
+        "y": 0
+      },
+      "bgra": [
+        16,
+        32,
+        48,
+        0
+      ],
+      "hex": "#302010",
+      "cssRgb": "rgb(48, 32, 16)"
+    }
+  ]
+}

@@ -10,6 +10,9 @@ members = [
     "plugins/screenshot",
     "plugins/translator",
     "plugins/translator/providers",
+    "plugins/color-picker",
+    "plugins/screen-ocr",
+    "plugins/qr-code",
     "apps/desktop",
     "examples/echo-plugin",
 ]

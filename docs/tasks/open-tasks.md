@@ -8,7 +8,7 @@
 | [Скриншоты](blocks/plugins/screenshot/README.md) | На ревью | 2 |
 | [Переводчик](blocks/plugins/translator/README.md) | Не сделано | 2 |
 | [Переводчик](blocks/plugins/translator/README.md) | На ревью | 1 |
-| [Desktop-хост](blocks/desktop/README.md) | Не сделано | 1 |
+| [Desktop-хост](blocks/desktop/README.md) | Не сделано | 2 |
 | [Desktop-хост](blocks/desktop/README.md) | На ревью | 1 |
 | [Контрольный плагин](blocks/plugins/control/README.md) | Не сделано | 1 |
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | Не сделано | 1 |

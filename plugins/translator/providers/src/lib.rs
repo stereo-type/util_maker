@@ -943,4 +943,69 @@ mod tests {
         };
         assert!(missing.validate().is_err());
     }
+
+    #[test]
+    fn hub_uses_only_active_profile_key() {
+        let settings = ProviderSettings::defaults();
+        let mut seen = Vec::new();
+        let hub = ProviderHub::from_settings(&settings, |reference| {
+            seen.push(reference.to_owned());
+            Some(format!("key-{reference}"))
+        })
+        .unwrap();
+        assert!(seen.contains(&YANDEX_SECRET_REF.to_owned()));
+        let transport = MockTransport::with_response(
+            200,
+            json!({
+                "translations": [{"text": "привет"}]
+            }),
+        );
+        let cancel = AtomicBool::new(false);
+        let result = hub.translate("hello", &transport, &cancel).unwrap();
+        assert_eq!(result.provider, ProviderKind::Yandex);
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].url.contains("yandex"));
+    }
+
+    #[test]
+    fn switching_active_profile_uses_new_service_only() {
+        let mut settings = ProviderSettings::defaults();
+        settings.active_profile = Some("google".to_owned());
+        let keys = |reference: &str| {
+            if reference == GOOGLE_SECRET_REF {
+                Some("google-key".to_owned())
+            } else {
+                Some("yandex-key".to_owned())
+            }
+        };
+        let hub = ProviderHub::from_settings(&settings, keys).unwrap();
+        let transport = MockTransport::with_response(
+            200,
+            json!({
+                "data": {"translations": [{"translatedText": "hello"}]}
+            }),
+        );
+        let cancel = AtomicBool::new(false);
+        let result = hub.translate("привет", &transport, &cancel).unwrap();
+        assert_eq!(result.provider, ProviderKind::Google);
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].url.contains("googleapis"));
+    }
+
+    #[test]
+    fn missing_active_key_does_not_fall_back_to_other_service() {
+        let settings = ProviderSettings::defaults();
+        let hub = ProviderHub::from_settings(&settings, |_| None).unwrap();
+        assert!(hub.missing_key_profile().is_some());
+        let transport =
+            MockTransport::with_error(TransportError::Network("не должен вызываться".to_owned()));
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            hub.translate("hello", &transport, &cancel).unwrap_err(),
+            ProviderError::MissingProfile("Яндекс")
+        );
+        assert!(transport.requests().is_empty());
+    }
 }

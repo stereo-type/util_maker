@@ -42,10 +42,11 @@ make example-package EXAMPLE_VERSION=0.2.0
 
 1. Соберите пакет командами выше и передайте пользователю `.umpkg` и
    `com.example-public.json`.
-2. Добавьте открытый ключ `com.example` в доверенные через будущий экран
-   настроек. Сейчас установка из UI ещё не реализована; проверка архива
-   выполняется командой `util-maker-package verify`.
-3. Установите пакет, назначьте разные сочетания на `hello` и `clock`.
+2. В настройках в разделе «Установка пакета» укажите путь к `.umpkg`, издателя
+   `com.example` и открытый ключ из `com.example-public.json` (64 hex-символа).
+   Нажмите «Проверить», сверьте отпечаток, отметьте подтверждение и нажмите
+   «Установить».
+3. Назначьте разные сочетания на `hello` и `clock`.
 4. Для обновления соберите пакет с `EXAMPLE_VERSION=0.2.0` и установите его
    поверх версии `0.1.0`. Оба ID действий сохраняют назначения.
 
@@ -69,22 +70,57 @@ printf '%s\n' \
 
 ## Windows
 
-Для проверки сценария 11 на Windows соберите пример и упакуйте его с
-платформой `windows-x64`:
+Для сценария 11 соберите `.exe` и упакуйте его с платформой `windows-x64`.
+Нужен Rust с target `x86_64-pc-windows-msvc` либо кросс-сборка в контейнере
+`docker/windows` (как в `make build-windows`).
 
 ```powershell
+$version = "0.1.0"
+
+# ключ создаётся один раз; повторный запуск не перезаписывает его
+if (-not (Test-Path dist/example-plugin/keys/com.example-private.json)) {
+  cargo run -p util-maker-packages --bin util-maker-package -- keygen `
+    --publisher com.example `
+    --private-key dist/example-plugin/keys/com.example-private.json `
+    --public-key dist/example-plugin/keys/com.example-public.json
+}
+
+$env:UTIL_MAKER_MODULE_VERSION = $version
 cargo build --release -p util-maker-example-echo --target x86_64-pc-windows-msvc
-$stage = "dist/example-plugin/windows-stage"
+
+$stage = "dist/example-plugin/windows-stage-$version"
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item target/x86_64-pc-windows-msvc/release/echo-plugin.exe $stage
+
 cargo run -p util-maker-packages --bin util-maker-package -- export `
   --source $stage `
   --manifest examples/echo-plugin/manifest.json `
-  --output dist/example-plugin/echo-plugin-0.1.0-windows-x64.umpkg `
+  --output "dist/example-plugin/echo-plugin-$version-windows-x64.umpkg" `
   --private-key dist/example-plugin/keys/com.example-private.json `
+  --version $version `
   --platform windows-x64
 ```
 
-Установите пакет через UI, добавьте открытый ключ, назначьте `hello` и `clock`
-разные сочетания и проверьте оба результата. Затем повторите с версией `0.2.0`
-и убедитесь, что назначения сохранились.
+`UTIL_MAKER_MODULE_VERSION` попадает в ответ `hello.moduleVersion`; без него
+`hello` вернёт версию crate `0.1.0`.
+
+Из Ubuntu без Rust на Windows тот же `.exe` собирается в контейнере
+`docker/windows`:
+
+```sh
+version=0.1.0
+docker run --rm --user "$(id -u):$(id -g)" \
+  --mount "type=bind,source=$PWD,target=/workspace" \
+  --env HOME=/workspace/.cache/windows-build/home \
+  --env CARGO_HOME=/workspace/.cache/windows-build/cargo \
+  --env CARGO_TARGET_DIR=/workspace/.cache/windows-build/target \
+  --env XWIN_CACHE_DIR=/workspace/.cache/windows-build/xwin \
+  --env UTIL_MAKER_MODULE_VERSION=$version \
+  util-maker-windows:local sh -ec \
+  "cd /workspace && cargo xwin build --release --target x86_64-pc-windows-msvc -p util-maker-example-echo --bin echo-plugin"
+```
+
+Установите пакет в разделе «Установка пакета»: путь к `.umpkg`, издатель
+`com.example`, открытый ключ из `com.example-public.json`. Назначьте `hello` и
+`clock` разные сочетания и проверьте оба результата. Для 0.2.0 повторите с
+`$version = "0.2.0"`: ID действий и назначения сохранятся.

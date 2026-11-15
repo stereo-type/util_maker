@@ -554,6 +554,52 @@ mod tests {
     }
 
     #[test]
+    fn updating_one_module_keeps_the_other_available() {
+        let (a1, trust_a, root) = package("com.example.a", "com.example", "0.1.0", 13);
+        let (a2, _, _) = package("com.example.a", "com.example", "0.2.0", 13);
+        let (b1, trust_b, _) = package("com.example.b", "com.example", "0.1.0", 14);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&a1, &trust_a, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .install(&b1, &trust_b, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .install(&a2, &trust_a, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        assert_eq!(store.module("com.example.a").unwrap().version, "0.2.0");
+        assert_eq!(store.module("com.example.b").unwrap().version, "0.1.0");
+        store.rollback("com.example.a").unwrap();
+        assert_eq!(store.module("com.example.a").unwrap().version, "0.1.0");
+        assert_eq!(store.module("com.example.b").unwrap().version, "0.1.0");
+    }
+
+    #[test]
+    fn failed_update_keeps_active_version_and_settings() {
+        let (v1, trust, root) = package("com.example.keep", "com.example", "0.1.0", 15);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        store
+            .install(&v1, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .save_settings("com.example.keep", serde_json::json!({"profile": "keep"}))
+            .unwrap();
+        let corrupt = root.join("corrupt.umpkg");
+        fs::write(&corrupt, b"broken").unwrap();
+        assert!(store
+            .install(&corrupt, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .is_err());
+        assert_eq!(store.module("com.example.keep").unwrap().version, "0.1.0");
+        assert_eq!(
+            store.settings("com.example.keep"),
+            Some(&serde_json::json!({"profile": "keep"}))
+        );
+    }
+
+    #[test]
     fn publishes_active_version_to_flat_catalog() {
         let (package_path, trust, root) =
             package("com.example.publish", "com.example", "0.1.0", 11);

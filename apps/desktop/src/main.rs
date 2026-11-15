@@ -2586,11 +2586,27 @@ fn spawn_session_watchdog(app: AppHandle) {
         if runtime.paused.load(Ordering::SeqCst) {
             continue;
         }
-        if !runtime.registered.load(Ordering::SeqCst) {
+        let probe_lost = {
+            let Ok(registrations) = runtime.registrations.lock() else {
+                continue;
+            };
+            let service = runtime.service.lock().expect("служба сочетаний");
+            let lost = registrations
+                .values()
+                .any(|registration| service.register(&registration.combo, 0xBFFF).is_ok());
+            if lost {
+                service.unregister(0xBFFF);
+            }
+            lost
+        };
+        if probe_lost || !runtime.registered.load(Ordering::SeqCst) {
+            runtime.unregister_all();
             let registered = runtime.register_all();
             runtime.registered.store(registered, Ordering::SeqCst);
             if registered {
                 set_shortcut_status(&app, "зарегистрировано");
+            } else {
+                set_shortcut_status(&app, "занято другой программой");
             }
         }
         if let Some(tray) = app.tray_by_id("main") {

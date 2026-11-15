@@ -162,6 +162,9 @@
       .modal-head h2 { margin: 0; }
       footer { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
       .muted { color: var(--muted); }
+      .extension-point { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+      .extension-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+      .extension-point select { margin-bottom: 8px; }
     </style>
   </head>
   <body>
@@ -184,6 +187,7 @@
             <h3>Действия</h3>
             <input id="shortcut-search" class="hotkey-input" type="search" placeholder="Поиск по действию или сочетанию" aria-label="Поиск действий" />
             <div id="plugin-actions"></div>
+            <div id="plugin-extensions"></div>
             <div id="plugin-settings"></div>
             <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
           </section>
@@ -214,6 +218,12 @@
           <button id="install-package" class="primary" type="button">Установить</button>
         </div>
         <div class="result" id="package-result" role="status" aria-live="polite">Проверка появится здесь.</div>
+      </section>
+
+      <section class="card" aria-labelledby="extension-packages-title">
+        <h2 id="extension-packages-title">Плагины-расширения</h2>
+        <p class="hint">Пакеты без собственных действий подключаются к микроприложению-родителю.</p>
+        <div id="extension-packages" role="list">Загрузка…</div>
       </section>
 
       <section class="card" aria-labelledby="startup-title">
@@ -281,6 +291,7 @@
         pluginMeta: document.getElementById("plugin-meta"),
         pluginClose: document.getElementById("plugin-close"),
         actions: document.getElementById("plugin-actions"),
+        pluginExtensions: document.getElementById("plugin-extensions"),
         settings: document.getElementById("plugin-settings"),
         search: document.getElementById("shortcut-search"),
         result: document.getElementById("result"),
@@ -291,6 +302,7 @@
         packageInstall: document.getElementById("install-package"),
         packageConfirm: document.getElementById("package-confirm"),
         packageResult: document.getElementById("package-result"),
+        extensionPackages: document.getElementById("extension-packages"),
         log: document.getElementById("log-path"),
         config: document.getElementById("config-path"),
         build: document.getElementById("build-kind"),
@@ -321,14 +333,15 @@
 
       function renderPlugins() {
         elements.list.innerHTML = "";
-        if (plugins.length === 0) {
+        const visible = plugins.filter((plugin) => !plugin.extensionOnly);
+        if (visible.length === 0) {
           const empty = document.createElement("p");
           empty.className = "hint";
-          empty.textContent = "Установленные пакеты не найдены. Проверьте каталог modules рядом с приложением.";
+          empty.textContent = "Микроприложения не найдены. Плагины-расширения открываются на странице своего микроприложения.";
           elements.list.append(empty);
           return;
         }
-        for (const plugin of plugins) {
+        for (const plugin of visible) {
           const row = document.createElement("div");
           row.className = "plugin-row";
           const info = document.createElement("div");
@@ -640,6 +653,7 @@
           elements.actions.append(actionRow(plugin, action));
         }
         renderPluginSettings(plugin);
+        renderExtensions(plugin);
         const packageActions = document.createElement("div");
         packageActions.className = "actions";
         const rollback = document.createElement("button");
@@ -661,6 +675,139 @@
         elements.actions.append(packageActions);
       }
 
+      async function renderExtensions(plugin) {
+        const host = elements.pluginExtensions;
+        host.innerHTML = "";
+        let points = [];
+        try {
+          points = await invoke("extension_points", { moduleId: plugin.id });
+        } catch (error) {
+          host.textContent = `Не удалось прочитать плагины: ${error}`;
+          return;
+        }
+        if (!points || points.length === 0) return;
+        const title = document.createElement("h3");
+        title.textContent = "Плагины";
+        host.append(title);
+        for (const point of points) {
+          const box = document.createElement("div");
+          box.className = "extension-point";
+          const head = document.createElement("div");
+          head.className = "extension-head";
+          const name = document.createElement("strong");
+          name.textContent = point.name;
+          const state = document.createElement("span");
+          state.className = "hint";
+          const active = (point.contributions || []).find(
+            (item) => item.moduleId === point.selected
+          );
+          state.textContent = point.selected
+            ? `Активный плагин: ${active ? active.name : point.selected}`
+            : "Нужна настройка: выберите плагин в списке ниже";
+          head.append(name, state);
+          box.append(head);
+
+          const select = document.createElement("select");
+          select.className = "hotkey-input";
+          select.setAttribute("aria-label", `Активный плагин для ${point.name}`);
+          const none = document.createElement("option");
+          none.value = "";
+          none.textContent = "Не выбрано";
+          select.append(none);
+          for (const contribution of point.contributions || []) {
+            const option = document.createElement("option");
+            option.value = contribution.moduleId;
+            option.textContent = contribution.available
+              ? contribution.name
+              : `${contribution.name} — ${contribution.reason || "недоступен"}`;
+            option.disabled = !contribution.available;
+            option.selected = contribution.moduleId === point.selected;
+            select.append(option);
+          }
+          select.addEventListener("change", async () => {
+            if (!select.value) return;
+            try {
+              await invoke("select_extension", {
+                moduleId: plugin.id,
+                pointId: point.pointId,
+                pluginId: select.value,
+              });
+              await loadPlugins();
+              const refreshed = plugins.find((item) => item.id === plugin.id);
+              if (refreshed) openPlugin(refreshed);
+            } catch (error) {
+              showResult(`Не удалось выбрать плагин: ${error}`, "error");
+            }
+          });
+          box.append(select);
+
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          const install = document.createElement("button");
+          install.type = "button";
+          install.textContent = "Установить плагин";
+          install.addEventListener("click", () => {
+            document.getElementById("package-title").scrollIntoView({ behavior: "smooth" });
+            elements.packagePath.focus();
+          });
+          actions.append(install);
+
+          for (const contribution of point.contributions || []) {
+            const entry = plugins.find((item) => item.id === contribution.moduleId);
+            if (entry) {
+              const manage = document.createElement("button");
+              manage.type = "button";
+              manage.textContent = `Настроить ${contribution.name}`;
+              manage.addEventListener("click", () => openPlugin(entry));
+              actions.append(manage);
+            }
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.disabled = !entry;
+            toggle.textContent = contribution.available
+              ? `Отключить ${contribution.name}`
+              : `Включить ${contribution.name}`;
+            toggle.addEventListener("click", async () => {
+              try {
+                await invoke("set_plugin_enabled", {
+                  pluginId: contribution.moduleId,
+                  enabled: !contribution.available,
+                });
+                await loadPlugins();
+                const refreshed = plugins.find((item) => item.id === plugin.id);
+                if (refreshed) openPlugin(refreshed);
+              } catch (error) {
+                showResult(`Не удалось переключить плагин: ${error}`, "error");
+              }
+            });
+            actions.append(toggle);
+
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.disabled = !entry;
+            remove.textContent = `Удалить ${contribution.name}`;
+            remove.addEventListener("click", async () => {
+              const confirmed = await askConfirm(
+                "Удалить плагин?",
+                `Пакет ${contribution.name} и его ключи будут удалены. Микроприложение и второй плагин останутся.`
+              );
+              if (!confirmed) return;
+              try {
+                await invoke("remove_package", { pluginId: contribution.moduleId });
+                await loadPlugins();
+                const refreshed = plugins.find((item) => item.id === plugin.id);
+                if (refreshed) openPlugin(refreshed);
+              } catch (error) {
+                showResult(`Не удалось удалить плагин: ${error}`, "error");
+              }
+            });
+            actions.append(remove);
+          }
+          box.append(actions);
+          host.append(box);
+        }
+      }
+
       function closePlugin() {
         elements.detail.hidden = true;
         currentPlugin = null;
@@ -680,8 +827,88 @@
               closePlugin();
             }
           }
+          await loadExtensionPackages();
         } catch (error) {
           elements.list.textContent = `Не удалось прочитать микроприложения: ${error}`;
+        }
+      }
+
+      const EXTENSION_STATES = {
+        available: "готов",
+        "parent-missing": "нет микроприложения",
+        "parent-disabled": "микроприложение отключено",
+        "point-missing": "точка не объявлена",
+        incompatible: "несовместимый контракт",
+        disabled: "пакет отключён",
+      };
+
+      async function loadExtensionPackages() {
+        let items = [];
+        try {
+          items = await invoke("extension_packages");
+        } catch (error) {
+          elements.extensionPackages.textContent = `Не удалось прочитать плагины: ${error}`;
+          return;
+        }
+        elements.extensionPackages.innerHTML = "";
+        if (!items || items.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "hint";
+          empty.textContent = "Плагины-расширения не установлены.";
+          elements.extensionPackages.append(empty);
+          return;
+        }
+        for (const item of items) {
+          const row = document.createElement("div");
+          row.className = "plugin-row";
+          const info = document.createElement("div");
+          info.className = "plugin-info";
+          const text = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "plugin-name";
+          name.textContent = `${item.name} · ${item.version}`;
+          const meta = document.createElement("div");
+          meta.className = "hint";
+          const state = EXTENSION_STATES[item.state] || item.state;
+          meta.textContent = `${item.parentName || item.parentId} · ${item.pointId} · ${state}`;
+          text.append(name, meta);
+          if (item.reason) {
+            const reason = document.createElement("div");
+            reason.className = "hint";
+            reason.textContent = item.reason;
+            text.append(reason);
+          }
+          info.append(text);
+
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          const parent = plugins.find((plugin) => plugin.id === item.parentId);
+          if (parent) {
+            const open = document.createElement("button");
+            open.type = "button";
+            open.textContent = "Открыть";
+            open.addEventListener("click", () => openPlugin(parent));
+            actions.append(open);
+          }
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "Удалить";
+          remove.addEventListener("click", async () => {
+            const confirmed = await askConfirm(
+              "Удалить плагин?",
+              `Пакет ${item.name} и его ключи будут удалены. Микроприложение останется.`
+            );
+            if (!confirmed) return;
+            try {
+              await invoke("remove_package", { pluginId: item.moduleId });
+              await loadPlugins();
+            } catch (error) {
+              elements.extensionPackages.textContent = `Не удалось удалить плагин: ${error}`;
+            }
+          });
+          actions.append(remove);
+          row.append(info, actions);
+          elements.extensionPackages.append(row);
         }
       }
 

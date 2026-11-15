@@ -8,6 +8,7 @@
 //! уничтожаются при закрытии; без окон процесс остаётся в трее.
 
 mod editor_placement;
+mod extensions;
 mod logging;
 mod package_manager;
 
@@ -77,7 +78,7 @@ struct OverlayFrame {
 /// Каталог установленных модулей и реестр ядра.
 struct CatalogState {
     root: PathBuf,
-    registry: Registry,
+    registry: Arc<Registry>,
     errors: Mutex<Vec<String>>,
 }
 
@@ -90,8 +91,10 @@ impl CatalogState {
             .map_err(|error| format!("каталог данных приложения: {error}"))?;
         std::fs::create_dir_all(&data_directory)
             .map_err(|error| format!("каталог {}: {error}", data_directory.display()))?;
-        let registry = Registry::with_state_path(data_directory.join("packages.json"))
-            .map_err(|error| format!("состояние пакетов: {error}"))?;
+        let registry = Arc::new(
+            Registry::with_state_path(data_directory.join("packages.json"))
+                .map_err(|error| format!("состояние пакетов: {error}"))?,
+        );
         let state = Self {
             root,
             registry,
@@ -769,6 +772,9 @@ fn main() {
             assign_hotkey,
             set_hotkey_save_failure,
             plugins,
+            extension_points,
+            select_extension,
+            extension_packages,
             plugin_settings,
             save_plugin_settings,
             invoke_form_command,
@@ -816,6 +822,13 @@ fn main() {
             setup_tray(app)?;
             if let Err(error) = bootstrap_bundled_packages(app.handle()) {
                 logging::write(&format!("пакетная поставка: {error}"));
+            }
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Err(error) =
+                    extensions::migrate_translator_profile(&state.catalog.registry, &state.settings)
+                {
+                    logging::write(&format!("миграция плагинов переводчика: {error}"));
+                }
             }
             set_shortcut_status(app.handle(), &status);
             sync_action_hotkeys(app.handle());
@@ -1694,7 +1707,13 @@ fn invoke_action_params(
         .ok_or_else(|| "каталог модулей не готов".to_owned())?;
     // Диспетчер живёт ровно один вызов: кадры и буферы освобождаются вместе
     // с ним, а параллельные действия не блокируют друг друга на время IPC.
-    let mut host = HostDispatcher::new(NativeHost::new(selection, state.settings.clone()));
+    let router = extensions::ExtensionRouterImpl::new(
+        state.catalog.registry.clone(),
+        state.settings.clone(),
+        selection.clone(),
+    );
+    let mut host = HostDispatcher::new(NativeHost::new(selection, state.settings.clone()))
+        .with_extensions(Box::new(router));
     state
         .catalog
         .registry
@@ -2039,6 +2058,7 @@ struct PluginDto {
     status: String,
     actions: Vec<PluginActionDto>,
     settings: Option<SettingsSchema>,
+    extension_only: bool,
 }
 
 /// Строит страницу настроек и трей из одного снимка активных манифестов.
@@ -2074,6 +2094,8 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
                 }
                 .to_owned(),
                 settings: entry.manifest.settings.clone(),
+                extension_only: entry.manifest.actions.is_empty()
+                    && !entry.manifest.provides.is_empty(),
                 actions: entry
                     .manifest
                     .actions
@@ -2275,10 +2297,14 @@ fn invoke_form_command(
         secrets: Default::default(),
     };
     let call_id = format!("command:{}", request.command_id);
-    let mut host = HostDispatcher::new(NativeHost::new(
-        Arc::new(Mutex::new(selection_service())),
+    let selection = Arc::new(Mutex::new(selection_service()));
+    let router = extensions::ExtensionRouterImpl::new(
+        state.catalog.registry.clone(),
         state.settings.clone(),
-    ));
+        selection.clone(),
+    );
+    let mut host = HostDispatcher::new(NativeHost::new(selection, state.settings.clone()))
+        .with_extensions(Box::new(router));
     host.begin_call(&CallSession::new(
         call_id.clone(),
         plugin_id.clone(),
@@ -2329,6 +2355,46 @@ fn set_plugin_secret(
         .settings
         .write_secret(&plugin_id, &name, &value)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn extension_points(
+    app: AppHandle,
+    module_id: String,
+) -> Result<Vec<util_maker_core::ExtensionPointStatus>, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    Ok(state.catalog.registry.extension_points(&module_id))
+}
+
+#[tauri::command]
+fn select_extension(
+    app: AppHandle,
+    module_id: String,
+    point_id: String,
+    plugin_id: String,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    state
+        .catalog
+        .registry
+        .select_extension(&module_id, &point_id, &plugin_id)
+        .map_err(|error| error.to_string())?;
+    logging::write(&format!(
+        "плагин расширения: {module_id}/{point_id} -> {plugin_id}"
+    ));
+    Ok(())
+}
+
+#[tauri::command]
+fn extension_packages(app: AppHandle) -> Vec<extensions::ExtensionPackageDto> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Vec::new();
+    };
+    extensions::extension_packages(&state.catalog.registry)
 }
 
 #[tauri::command]

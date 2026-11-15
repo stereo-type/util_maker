@@ -1061,7 +1061,9 @@ fn selection_key(module_id: &str, point_id: &str) -> String {
     format!("{module_id}/{point_id}")
 }
 
-fn interface_matches(requirement: &str, version: &str) -> bool {
+/// Совместим ли диапазон `interfaceVersion` вклада с точной версией
+/// контракта точки. Общая проверка для реестра и интерфейса.
+pub fn interface_matches(requirement: &str, version: &str) -> bool {
     let normalized = requirement
         .replace(',', " ")
         .split_whitespace()

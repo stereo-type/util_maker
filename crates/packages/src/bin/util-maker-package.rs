@@ -12,6 +12,10 @@
 //! util-maker-package verify --package plugin.umpkg \
 //!     --public-key dist/keys/org.utilmaker-public.json \
 //!     --platform linux-x64 [--host-api 1.0.0]
+//! util-maker-package install --package plugin.umpkg \
+//!     --public-key dist/keys/org.utilmaker-public.json --profile PROFILE \
+//!     --platform linux-x64 [--host-api 1.0.0]
+//! util-maker-package list --profile PROFILE
 //! ```
 //!
 //! Закрытый ключ не печатается. `keygen` создаёт новый файл и не перезаписывает
@@ -30,7 +34,8 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use util_maker_packages::{
-    ensure_key_is_outside_package, export_package, verify_path, ExportOptions, TrustStore,
+    ensure_key_is_outside_package, export_package, verify_path, ExportOptions, PackageStore,
+    TrustStore,
 };
 use util_maker_sdk::HOST_API_VERSION;
 
@@ -66,6 +71,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         "keygen" => keygen(&flags),
         "export" => export(&flags),
         "verify" => verify(&flags),
+        "install" => install(&flags),
+        "list" => list(&flags),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -150,6 +157,42 @@ fn verify(flags: &Flags) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn install(flags: &Flags) -> Result<(), Box<dyn Error>> {
+    let public_path = PathBuf::from(flags.required("public-key")?);
+    let (publisher, key) = load_public_key(&public_path)?;
+    let package = PathBuf::from(flags.required("package")?);
+    let profile = PathBuf::from(flags.required("profile")?);
+    let platform = flags.required("platform")?;
+    let host_api = flags.optional("host-api").unwrap_or(HOST_API_VERSION);
+    let host_api = Version::parse(host_api)?;
+    let mut trust = TrustStore::new();
+    trust.add_publisher(&publisher, key)?;
+    let store = PackageStore::open(&profile)?;
+    let result = store.install_path(&package, &trust, platform, &host_api)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "profile": profile,
+            "id": result.package.id,
+            "version": result.package.version,
+            "publisher": result.package.publisher,
+            "enabled": result.package.enabled,
+            "executable": result.package.executable,
+            "packageSha256": result.package.package_sha256,
+            "alreadyInstalled": result.already_installed,
+            "previousVersion": result.previous_version,
+        }))?
+    );
+    Ok(())
+}
+
+fn list(flags: &Flags) -> Result<(), Box<dyn Error>> {
+    let profile = PathBuf::from(flags.required("profile")?);
+    let store = PackageStore::open(&profile)?;
+    println!("{}", serde_json::to_string_pretty(&store.installed()?)?);
+    Ok(())
+}
+
 fn load_private_key(path: &Path) -> Result<(String, SigningKey), Box<dyn Error>> {
     let text = fs::read_to_string(path)?;
     let key: PrivateKeyFile = serde_json::from_str(&text)?;
@@ -227,4 +270,8 @@ fn print_help() {
         "  export --source DIR --manifest FILE --output FILE --private-key FILE [--version V] [--platform P]"
     );
     println!("  verify --package FILE --public-key FILE --platform P [--host-api V]");
+    println!(
+        "  install --package FILE --public-key FILE --profile DIR --platform P [--host-api V]"
+    );
+    println!("  list --profile DIR");
 }

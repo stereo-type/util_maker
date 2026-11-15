@@ -10,7 +10,8 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use util_maker_core::ipc::ModuleProcess;
 use util_maker_packages::{
-    verify_path, InstalledModule, PackageError, PackagePreview, PackageStore, TrustStore,
+    verify_path, LegacyInstalledModule as InstalledModule, LegacyPackageStore as PackageStore,
+    PackageError, PackagePreview, TrustStore,
 };
 use util_maker_sdk::HOST_API_VERSION;
 

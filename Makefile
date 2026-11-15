@@ -16,7 +16,11 @@ PACKAGE_OUTPUT ?=
 PACKAGE_PRIVATE_KEY ?=
 PACKAGE_VERSION ?=
 PACKAGE_PLATFORM ?=
+PACKAGE_PROFILE ?=
+PACKAGE_PUBLIC_KEY ?=
+PACKAGE_HOST_API ?=
 PACKAGE_EXPORT_ARGS = $(if $(PACKAGE_VERSION),--version '$(PACKAGE_VERSION)') $(if $(PACKAGE_PLATFORM),--platform '$(PACKAGE_PLATFORM)')
+PACKAGE_INSTALL_ARGS = --package '$(PACKAGE_OUTPUT)' --public-key '$(PACKAGE_PUBLIC_KEY)' --profile '$(PACKAGE_PROFILE)' --platform '$(PACKAGE_PLATFORM)' $(if $(PACKAGE_HOST_API),--host-api '$(PACKAGE_HOST_API)')
 VERSION := $(shell sed -n 's/^  "version": "\([^"]*\)".*/\1/p' apps/desktop/tauri.conf.json | head -n 1)
 export CMD
 
@@ -33,7 +37,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
-	version check-version bump-version build-windows-rise icons screenshot-check control-samples example-package package-export windows-image build-windows
+	version check-version bump-version build-windows-rise icons screenshot-check control-samples example-package package-export package-install windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -52,6 +56,7 @@ help:
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
 		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
+		'make package-install  — установить .umpkg в профиль: PACKAGE_OUTPUT, PACKAGE_PUBLIC_KEY, PACKAGE_PROFILE, PACKAGE_PLATFORM' \
 		'make build-windows  — собрать NSIS-установщик в dist/ (BUILD_KIND=dev)'
 
 dev-image:
@@ -132,6 +137,13 @@ control-samples: dev-image
 
 example-package: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "EXAMPLE_PACKAGE_DIR='$(EXAMPLE_PACKAGE_DIR)' EXAMPLE_VERSION='$(EXAMPLE_VERSION)' EXAMPLE_PLATFORM='$(EXAMPLE_PLATFORM)' sh /workspace/scripts/make-example-package.sh"
+
+package-install: dev-image
+	@test -n "$(PACKAGE_OUTPUT)" || { echo 'Укажите PACKAGE_OUTPUT=путь/к/пакету.umpkg'; exit 2; }
+	@test -n "$(PACKAGE_PUBLIC_KEY)" || { echo 'Укажите PACKAGE_PUBLIC_KEY=путь/к/публичному/ключу.json'; exit 2; }
+	@test -n "$(PACKAGE_PROFILE)" || { echo 'Укажите PACKAGE_PROFILE=каталог/профиля'; exit 2; }
+	@test -n "$(PACKAGE_PLATFORM)" || { echo 'Укажите PACKAGE_PLATFORM=linux-x64'; exit 2; }
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo run --quiet -p util-maker-packages --bin util-maker-package -- install $(PACKAGE_INSTALL_ARGS)"
 
 package-export: dev-image
 	@test -n "$(PACKAGE_SOURCE)" || { echo 'Укажите PACKAGE_SOURCE=<каталог полезной нагрузки>'; exit 2; }

@@ -1693,7 +1693,7 @@ fn install_package(
     package_path: String,
     publisher: String,
     key_hex: String,
-) -> Result<util_maker_packages::InstalledModule, String> {
+) -> Result<util_maker_packages::LegacyInstalledModule, String> {
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "менеджер пакетов не готов".to_owned())?;

@@ -52,6 +52,23 @@ fn manifest_declares_translate_action_and_entrypoints() {
 }
 
 #[test]
+fn manifest_declares_translator_icon() {
+    let path = manifest_path();
+    let manifest = Manifest::load(&path).expect("манифест проходит проверку SDK");
+    assert_eq!(manifest.icon.as_deref(), Some("assets/icon.png"));
+    let icon = path
+        .parent()
+        .expect("каталог манифеста")
+        .join("assets/icon.png");
+    let bytes = std::fs::read(&icon).expect("иконка переводчика");
+    assert!(
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "иконка переводчика не PNG"
+    );
+    assert!(bytes.len() > 100, "иконка переводчика пустая");
+}
+
+#[test]
 fn initialize_confirms_translator_identity() {
     let mut process = spawn();
     let initialized = process

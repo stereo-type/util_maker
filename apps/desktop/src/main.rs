@@ -976,6 +976,26 @@ fn embedded_menu_icon(bytes: &'static [u8]) -> Option<Image<'static>> {
     Image::from_bytes(bytes).ok()
 }
 
+/// Значок служебного пункта меню: шестерёнка настроек, пауза,
+/// перерегистрация и выход. Логотип приложения остаётся только у самого
+/// хоста и контрольного модуля.
+fn service_menu_icon(id: &str) -> Option<Image<'static>> {
+    let bytes: &'static [u8] = match id {
+        "settings" => include_bytes!("../icons/menu-settings.png"),
+        "pause" => include_bytes!("../icons/menu-pause.png"),
+        "retry" => include_bytes!("../icons/menu-retry.png"),
+        "quit" => include_bytes!("../icons/menu-quit.png"),
+        _ => return None,
+    };
+    embedded_menu_icon(bytes)
+}
+
+/// Нейтральная заглушка микроприложения без иконки: пункт остаётся
+/// доступным по тексту, но не получает логотип приложения.
+fn fallback_menu_icon() -> Option<Image<'static>> {
+    embedded_menu_icon(include_bytes!("../icons/menu-fallback.png"))
+}
+
 fn action_menu_icon(app: &AppHandle, module_id: &str) -> Option<Image<'static>> {
     let state = app.try_state::<AppState>()?;
     let entry = state
@@ -1001,7 +1021,7 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
         "settings",
         "Настройки",
         true,
-        embedded_menu_icon(include_bytes!("../icons/32x32.png")),
+        service_menu_icon("settings"),
         None::<&str>,
     )
     .map_err(|error| format!("пункт настроек: {error}"))?;
@@ -1036,7 +1056,7 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
                 format!("action:{index}"),
                 format!("{} — {}", action.module_name, action.action_name),
                 action.enabled,
-                action_menu_icon(app, &action.module_id),
+                action_menu_icon(app, &action.module_id).or_else(fallback_menu_icon),
                 None::<&str>,
             )
             .map_err(|error| format!("пункт действия: {error}"))?;
@@ -1055,12 +1075,7 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
         ("retry", "Перерегистрировать сочетание"),
         ("quit", "Выход"),
     ] {
-        let icon = match id {
-            "pause" => embedded_menu_icon(include_bytes!("../icons/status-paused.png")),
-            "retry" => embedded_menu_icon(include_bytes!("../icons/status-active.png")),
-            _ => embedded_menu_icon(include_bytes!("../icons/32x32.png")),
-        };
-        let item = IconMenuItem::with_id(app, id, label, true, icon, None::<&str>)
+        let item = IconMenuItem::with_id(app, id, label, true, service_menu_icon(id), None::<&str>)
             .map_err(|error| format!("пункт меню {id}: {error}"))?;
         menu.append(&item)
             .map_err(|error| format!("меню трея: {error}"))?;
@@ -2262,6 +2277,18 @@ fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Resul
     Ok(())
 }
 
+/// Проверяет сигнатуру файла, чтобы повреждённая иконка не превращалась в
+/// «битую картинку»: в этом случае интерфейс показывает нейтральную заглушку.
+fn has_image_signature(bytes: &[u8]) -> bool {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(b"\xff\xd8\xff")
+        || (bytes.len() > 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP")
+    {
+        return true;
+    }
+    std::str::from_utf8(bytes).is_ok_and(|text| text.contains("<svg"))
+}
+
 /// Небольшой PNG-значок из манифеста передаётся в WebView как data URL.
 fn icon_data_url(path: &Path) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
@@ -2269,6 +2296,9 @@ fn icon_data_url(path: &Path) -> Option<String> {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
+    if !has_image_signature(&bytes) {
+        return None;
+    }
     let mime = match path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -3203,10 +3233,46 @@ mod tests {
         assert_eq!(base64(b"M"), "TQ==");
         let root = temp_directory("icon");
         let icon = root.join("icon.png");
-        std::fs::write(&icon, [0x89, b'P', b'N', b'G']).expect("иконка");
+        std::fs::write(&icon, b"\x89PNG\r\n\x1a\n").expect("иконка");
         let url = icon_data_url(&icon).expect("data URL");
         assert!(url.starts_with("data:image/png;base64,"));
-        assert_eq!(url, "data:image/png;base64,iVBORw==");
+        assert_eq!(url, "data:image/png;base64,iVBORw0KGgo=");
+        let broken = root.join("broken.png");
+        std::fs::write(&broken, b"not an image").expect("повреждённый файл");
+        assert!(
+            icon_data_url(&broken).is_none(),
+            "повреждённая иконка не должна попадать в интерфейс"
+        );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn menu_icons_are_distinct_and_decode() {
+        let app_icon: &[u8] = include_bytes!("../icons/32x32.png");
+        let service: [(&str, &[u8]); 5] = [
+            ("settings", include_bytes!("../icons/menu-settings.png")),
+            ("pause", include_bytes!("../icons/menu-pause.png")),
+            ("retry", include_bytes!("../icons/menu-retry.png")),
+            ("quit", include_bytes!("../icons/menu-quit.png")),
+            ("fallback", include_bytes!("../icons/menu-fallback.png")),
+        ];
+        for (name, bytes) in service {
+            let image = Image::from_bytes(bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!((image.width(), image.height()), (32, 32), "{name}");
+            assert_ne!(bytes, app_icon, "{name} повторяет логотип приложения");
+        }
+        for (index, (name, bytes)) in service.iter().enumerate() {
+            for (other_name, other) in service.iter().skip(index + 1) {
+                assert_ne!(bytes, other, "{name} и {other_name} совпадают");
+            }
+        }
+        let screenshot: &[u8] = include_bytes!("../../../plugins/screenshot/assets/icon.png");
+        let translator: &[u8] = include_bytes!("../../../plugins/translator/assets/icon.png");
+        for (name, bytes) in [("screenshot", screenshot), ("translator", translator)] {
+            let image = Image::from_bytes(bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!((image.width(), image.height()), (32, 32), "{name}");
+            assert_ne!(bytes, app_icon, "{name} повторяет логотип приложения");
+        }
+        assert_ne!(screenshot, translator, "иконки микроприложений совпадают");
     }
 }

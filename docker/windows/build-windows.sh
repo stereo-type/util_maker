@@ -53,10 +53,13 @@ translator_module="$target_dir/x86_64-pc-windows-msvc/release/translator-module.
 color_picker_module="$target_dir/x86_64-pc-windows-msvc/release/color-picker-module.exe"
 manifest="/workspace/plugins/control/manifest.json"
 screenshot_manifest="/workspace/plugins/screenshot/manifest.json"
+screenshot_icon="/workspace/plugins/screenshot/assets/icon.png"
 translator_manifest="/workspace/plugins/translator/manifest.json"
+translator_icon="/workspace/plugins/translator/assets/icon.png"
 color_picker_manifest="/workspace/plugins/color-picker/manifest.json"
+color_picker_icon="/workspace/plugins/color-picker/assets/icon.png"
 
-for file in "$exe" "$module" "$manifest" "$screenshot_module" "$screenshot_manifest" "$translator_module" "$translator_manifest" "$color_picker_module" "$color_picker_manifest"; do
+for file in "$exe" "$module" "$manifest" "$screenshot_module" "$screenshot_manifest" "$screenshot_icon" "$translator_module" "$translator_manifest" "$translator_icon" "$color_picker_module" "$color_picker_manifest"; do
     if [ ! -f "$file" ]; then
         echo "Не найден обязательный файл сборки: $file" >&2
         exit 1
@@ -105,9 +108,9 @@ package_plugin() {
         --host-api 1.0.0 >/dev/null
 }
 
-package_plugin org.utilmaker.screenshot "$screenshot_module" "$screenshot_manifest" /workspace/plugins/screenshot/assets/icon.png
-package_plugin org.utilmaker.translator "$translator_module" "$translator_manifest" ""
-package_plugin org.utilmaker.color-picker "$color_picker_module" "$color_picker_manifest" /workspace/plugins/color-picker/assets/icon.png
+package_plugin org.utilmaker.screenshot "$screenshot_module" "$screenshot_manifest" "$screenshot_icon"
+package_plugin org.utilmaker.translator "$translator_module" "$translator_manifest" "$translator_icon"
+package_plugin org.utilmaker.color-picker "$color_picker_module" "$color_picker_manifest" "$color_picker_icon"
 
 rm -rf "$package_dir/staging"
 

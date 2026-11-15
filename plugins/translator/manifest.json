@@ -9,6 +9,7 @@
     "windows-x64": "translator-module.exe",
     "linux-x64": "translator-module"
   },
+  "icon": "assets/icon.png",
   "capabilities": [
     "selection.read",
     "settings.read",

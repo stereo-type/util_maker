@@ -31,6 +31,26 @@ fn manifest_is_valid_and_declares_action() {
 }
 
 #[test]
+fn manifest_declares_own_icon() {
+    let path = manifest_path();
+    let manifest = Manifest::load(&path).expect("манифест");
+    assert_eq!(manifest.icon.as_deref(), Some("assets/icon.png"));
+    let icon = path.parent().expect("каталог").join("assets/icon.png");
+    let bytes = std::fs::read(&icon).expect("иконка «Скриншотов»");
+    assert!(
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "иконка «Скриншотов» не PNG"
+    );
+    let app_icon =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/icons/32x32.png");
+    let app_bytes = std::fs::read(&app_icon).expect("иконка приложения");
+    assert_ne!(
+        bytes, app_bytes,
+        "иконка «Скриншотов» повторяет логотип приложения"
+    );
+}
+
+#[test]
 fn process_reports_missing_frame_and_unknown_action() {
     let executable = support::binary("screenshot-plugin");
     assert!(

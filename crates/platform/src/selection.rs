@@ -48,7 +48,7 @@ impl SelectionSource for UnsupportedSelection {
 #[cfg(windows)]
 mod native {
     use super::{SelectionSnapshot, SelectionSource};
-    use windows::core::{Interface, BSTR};
+    use windows::core::BSTR;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };

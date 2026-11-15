@@ -6,6 +6,7 @@
 //! активируется только после успешной проверки.
 
 pub mod export;
+pub mod install;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -22,6 +23,7 @@ use zip::ZipArchive;
 pub use export::{
     ensure_key_is_outside_package, export_package, ExportError, ExportOptions, ExportResult,
 };
+pub use install::{InstallError, InstallResult, InstalledPackage, PackageStore};
 
 /// Имя манифеста внутри архива.
 pub const MANIFEST_ENTRY: &str = "manifest.json";
@@ -118,6 +120,10 @@ pub struct PreviewAction {
 pub struct VerifiedPackage {
     pub preview: PackagePreview,
     pub manifest: Manifest,
+    /// Точные подписанные байты манифеста из архива.
+    pub manifest_json: Vec<u8>,
+    /// Отсоединённая подпись Ed25519 из архива.
+    pub signature: Vec<u8>,
 }
 
 /// Проверяет пакет по пути.
@@ -204,7 +210,12 @@ pub fn verify_reader<R: Read + Seek>(
         file_count: manifest.files.len(),
         total_bytes,
     };
-    Ok(VerifiedPackage { preview, manifest })
+    Ok(VerifiedPackage {
+        preview,
+        manifest,
+        manifest_json: manifest_bytes,
+        signature: signature_bytes,
+    })
 }
 
 fn validate_manifest_paths(manifest: &Manifest) -> Result<(), PackageError> {

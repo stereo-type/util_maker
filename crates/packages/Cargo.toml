@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Проверка локальных пакетов .umpkg до установки"
+description = "Проверка и установка локальных пакетов .umpkg в профиль"
 
 [dependencies]
 util-maker-sdk.workspace = true

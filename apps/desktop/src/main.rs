@@ -12,7 +12,7 @@ mod package_manager;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -373,6 +373,12 @@ fn check_dto(result: CheckResult) -> HotkeyCheckDto {
     }
 }
 
+#[derive(Clone)]
+struct Registration {
+    combo: String,
+    target: ActionRef,
+}
+
 /// Регистрация прототипа: одно сочетание, пауза и повторная попытка.
 struct ShortcutRuntime {
     service: Mutex<HotkeyService>,
@@ -380,6 +386,8 @@ struct ShortcutRuntime {
     paused: AtomicBool,
     registered: AtomicBool,
     status: Mutex<String>,
+    registrations: Mutex<BTreeMap<u32, Registration>>,
+    next_id: AtomicU32,
 }
 
 impl ShortcutRuntime {
@@ -388,6 +396,13 @@ impl ShortcutRuntime {
         let events = service.take_events();
         let combo = persisted_shortcut(app).unwrap_or_else(|| CONTROL_SHORTCUT.to_owned());
         let (registered, status) = register_shortcut(&service, &combo);
+        let registrations = BTreeMap::from([(
+            HOTKEY_ID,
+            Registration {
+                combo: combo.clone(),
+                target: control_action_ref(),
+            },
+        )]);
         Ok((
             Self {
                 service: Mutex::new(service),
@@ -395,9 +410,134 @@ impl ShortcutRuntime {
                 paused: AtomicBool::new(false),
                 registered: AtomicBool::new(registered),
                 status: Mutex::new(status),
+                registrations: Mutex::new(registrations),
+                next_id: AtomicU32::new(2),
             },
             events,
         ))
+    }
+}
+
+impl ShortcutRuntime {
+    fn target_for(&self, id: u32) -> Option<ActionRef> {
+        self.registrations
+            .lock()
+            .ok()
+            .and_then(|registrations| registrations.get(&id).map(|entry| entry.target.clone()))
+    }
+
+    fn unregister_all(&self) {
+        if let Ok(registrations) = self.registrations.lock() {
+            let service = self.service.lock().expect("служба сочетаний");
+            for id in registrations.keys() {
+                service.unregister(*id);
+            }
+        }
+    }
+
+    /// Возвращает состояние основного сочетания после повторной регистрации.
+    fn register_all(&self) -> bool {
+        let Ok(registrations) = self.registrations.lock() else {
+            return false;
+        };
+        let service = self.service.lock().expect("служба сочетаний");
+        let mut control = false;
+        for (id, registration) in registrations.iter() {
+            let registered = service.register(&registration.combo, *id).is_ok();
+            if *id == HOTKEY_ID {
+                control = registered;
+            }
+        }
+        control
+    }
+
+    fn remove_module(&self, module_id: &str) {
+        let ids: Vec<u32> = {
+            let Ok(mut registrations) = self.registrations.lock() else {
+                return;
+            };
+            let ids = registrations
+                .iter()
+                .filter(|(_, entry)| entry.target.module_id == module_id)
+                .map(|(id, _)| *id)
+                .collect();
+            registrations.retain(|_, entry| entry.target.module_id != module_id);
+            ids
+        };
+        let service = self.service.lock().expect("служба сочетаний");
+        for id in ids {
+            service.unregister(id);
+        }
+    }
+}
+
+fn sync_action_hotkeys(app: &AppHandle) {
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return;
+    };
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let actions = state.catalog.registry.actions();
+    let existing: BTreeSet<(String, String)> = runtime
+        .registrations
+        .lock()
+        .map(|registrations| {
+            registrations
+                .values()
+                .map(|entry| {
+                    (
+                        entry.target.module_id.clone(),
+                        entry.target.action_id.clone(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for action in actions {
+        if existing.contains(&(action.module_id.clone(), action.action_id.clone())) {
+            continue;
+        }
+        let Some(combo) = state
+            .catalog
+            .registry
+            .module(&action.module_id)
+            .and_then(|entry| {
+                entry
+                    .manifest
+                    .action(&action.action_id)
+                    .and_then(|manifest_action| {
+                        manifest_action.recommended_hotkeys.first().cloned()
+                    })
+            })
+        else {
+            continue;
+        };
+        let id = runtime.next_id.fetch_add(1, Ordering::SeqCst);
+        let registered = {
+            let service = runtime.service.lock().expect("служба сочетаний");
+            service.register(&combo, id).is_ok()
+        };
+        if registered {
+            if let Ok(mut registrations) = runtime.registrations.lock() {
+                registrations.insert(
+                    id,
+                    Registration {
+                        combo: combo.clone(),
+                        target: ActionRef::new(action.module_id.clone(), action.action_id.clone()),
+                    },
+                );
+            }
+            logging::write(&format!(
+                "сочетание {combo}: {} / {}",
+                action.module_id, action.action_id
+            ));
+        } else {
+            logging::write(&format!(
+                "сочетание {combo} для {} / {} не зарегистрировано",
+                action.module_id, action.action_id
+            ));
+        }
     }
 }
 
@@ -500,6 +640,7 @@ fn main() {
             app.manage(HotkeyDemo::new());
             setup_tray(app)?;
             set_shortcut_status(app.handle(), &status);
+            sync_action_hotkeys(app.handle());
             if app
                 .try_state::<AppState>()
                 .and_then(|state| state.catalog.registry.module(CONTROL_MODULE_ID))
@@ -911,9 +1052,13 @@ fn spawn_hotkey_listener(app: AppHandle, events: Receiver<HotkeyEvent>) {
                 if paused {
                     continue;
                 }
+                let target = app
+                    .try_state::<ShortcutRuntime>()
+                    .and_then(|runtime| runtime.target_for(event.id))
+                    .unwrap_or_else(control_action_ref);
                 let handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
-                    invoke_and_show(&handle, control_action_ref(), InvocationSource::Hotkey);
+                    invoke_and_show(&handle, target, InvocationSource::Hotkey);
                 });
             }
             Ok(_) => {}
@@ -977,25 +1122,19 @@ fn toggle_shortcut_pause(app: &AppHandle) {
         return;
     };
     if runtime.paused.load(Ordering::SeqCst) {
-        let (registered, status) = {
-            let combo = runtime.combo.lock().expect("сочетание").clone();
-            let service = runtime.service.lock().expect("служба сочетаний");
-            register_shortcut(&service, &combo)
-        };
+        let registered = runtime.register_all();
         runtime.registered.store(registered, Ordering::SeqCst);
         if registered {
             runtime.paused.store(false, Ordering::SeqCst);
+            set_shortcut_status(app, "зарегистрировано");
+        } else {
+            set_shortcut_status(app, "занято другой программой");
         }
-        set_shortcut_status(app, &status);
     } else {
-        // Сначала закрываем обработку событий, затем освобождаем регистрацию:
+        // Сначала закрываем обработку событий, затем освобождаем регистрации:
         // иначе уже поставленное в очередь WM_HOTKEY успеет вызвать действие.
         runtime.paused.store(true, Ordering::SeqCst);
-        runtime
-            .service
-            .lock()
-            .expect("служба сочетаний")
-            .unregister(HOTKEY_ID);
+        runtime.unregister_all();
         runtime.registered.store(false, Ordering::SeqCst);
         set_shortcut_status(app, "на паузе");
     }
@@ -1014,16 +1153,15 @@ fn retry_shortcut(app: &AppHandle) {
         set_shortcut_status(app, "уже зарегистрировано");
         return;
     }
-    let (registered, status) = {
-        let combo = runtime.combo.lock().expect("сочетание").clone();
-        let service = runtime.service.lock().expect("служба сочетаний");
-        register_shortcut(&service, &combo)
-    };
+    runtime.unregister_all();
+    let registered = runtime.register_all();
     runtime.registered.store(registered, Ordering::SeqCst);
     if registered {
         runtime.paused.store(false, Ordering::SeqCst);
+        set_shortcut_status(app, "зарегистрировано");
+    } else {
+        set_shortcut_status(app, "занято другой программой");
     }
-    set_shortcut_status(app, &status);
 }
 
 /// Ключ платформы в манифесте пакета.
@@ -1126,6 +1264,7 @@ fn refresh_plugins_inner(app: &AppHandle) -> Vec<PluginDto> {
     if let Err(error) = rebuild_tray_menu(app) {
         logging::write(&format!("меню трея: {error}"));
     }
+    sync_action_hotkeys(app);
     collect_plugins(app)
 }
 
@@ -1188,6 +1327,11 @@ fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
         .remove(&plugin_id)
         .map_err(|error| error.to_string())?;
     drop(manager);
+    if removed {
+        if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+            runtime.remove_module(&plugin_id);
+        }
+    }
     if removed && plugin_id == CONTROL_MODULE_ID {
         if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
             runtime
@@ -1273,6 +1417,11 @@ fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Resul
                 "отключён"
             }
         ));
+        if !enabled {
+            if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+                runtime.remove_module(&plugin_id);
+            }
+        }
         if plugin_id == CONTROL_MODULE_ID {
             if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
                 let service = runtime.service.lock().expect("служба сочетаний");
@@ -1296,6 +1445,7 @@ fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Resul
                 }
             }
         }
+        sync_action_hotkeys(&app);
         rebuild_tray_menu(&app)?;
     }
     Ok(())
@@ -1364,6 +1514,11 @@ fn change_control_shortcut(
     match service.register(&normalized, HOTKEY_ID) {
         Ok(()) => {
             *state.combo.lock().expect("сочетание") = normalized.clone();
+            if let Ok(mut registrations) = state.registrations.lock() {
+                if let Some(registration) = registrations.get_mut(&HOTKEY_ID) {
+                    registration.combo = normalized.clone();
+                }
+            }
             state.registered.store(true, Ordering::SeqCst);
             state.paused.store(false, Ordering::SeqCst);
             drop(service);

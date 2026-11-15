@@ -15,6 +15,9 @@
 | [Скриншоты](plugins/screenshot/README.md) | Выбор области, аннотации и копирование кадра. | [Задачи](../tasks/blocks/plugins/screenshot/README.md) |
 | [Переводчик](plugins/translator/README.md) | Получение выбранного текста, выбор профиля и показ результата. | [Задачи](../tasks/blocks/plugins/translator/README.md) |
 | [Провайдеры переводчика](plugins/translator/providers/README.md) | HTTP-запросы к Яндексу и Google, проверка профиля и разбор ошибок. | [Задачи](../tasks/blocks/plugins/translator/providers/README.md) |
+| [Текст с экрана](plugins/screen-ocr/README.md) | Локальное OCR выбранной области, правка и копирование распознанного текста. | [Задачи](../tasks/blocks/plugins/screen-ocr/README.md) |
+| [QR-коды](plugins/qr-code/README.md) | Показ QR из текста и чтение QR из области экрана. | [Задачи](../tasks/blocks/plugins/qr-code/README.md) |
+| [Пипетка цвета](plugins/color-picker/README.md) | Выбор пикселя с лупой и копирование значения в HEX или RGB. | [Задачи](../tasks/blocks/plugins/color-picker/README.md) |
 
 ## Сквозная приёмка
 

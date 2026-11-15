@@ -2,6 +2,8 @@
 
 [План развития](../roadmap.md) определяет, для каких результатов предстоит завести карточки. Здесь собраны очереди уже поставленных задач.
 
+Количество незавершённых задач и задач на ревью по каждой очереди смотрите в [сводке по разделам](open-tasks.md).
+
 Результаты проверки 0.4.5 — [windows-0.4.5-findings.md](windows-0.4.5-findings.md).
 
 Единый чек-лист приёмки Windows — [windows-acceptance.md](windows-acceptance.md).
@@ -38,6 +40,9 @@
 | `sdk` | [SDK и протокол](blocks/sdk/README.md) | [ТЗ](../blocks/sdk/README.md) |
 | `plugins/control` | [Контрольный плагин](blocks/plugins/control/README.md) | [ТЗ](../blocks/plugins/control/README.md) |
 | `plugins/translator/providers` | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | [ТЗ](../blocks/plugins/translator/providers/README.md) |
+| `plugins/screen-ocr` | [Текст с экрана](blocks/plugins/screen-ocr/README.md) | [ТЗ](../blocks/plugins/screen-ocr/README.md) |
+| `plugins/qr-code` | [QR-коды](blocks/plugins/qr-code/README.md) | [ТЗ](../blocks/plugins/qr-code/README.md) |
+| `plugins/color-picker` | [Пипетка цвета](blocks/plugins/color-picker/README.md) | [ТЗ](../blocks/plugins/color-picker/README.md) |
 
 Все задачи первого этапа, включая прежние общие задачи, сохранены в [очереди ядра](blocks/core/README.md). Результаты ревью прототипа собраны в [протоколе версии 0.4.1](prototype-review.md).
 

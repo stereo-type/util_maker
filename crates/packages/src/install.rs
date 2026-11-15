@@ -124,6 +124,87 @@ struct VersionRecord {
     package_sha256: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct LegacyState {
+    #[serde(default)]
+    modules: BTreeMap<String, LegacyModule>,
+    #[serde(default)]
+    previous: BTreeMap<String, LegacyModule>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyModule {
+    id: String,
+    publisher: String,
+    version: String,
+}
+
+/// Переносит профиль старого desktop-хранилища в канонический формат.
+fn migrate_legacy_profile(root: &Path) -> Result<bool, InstallError> {
+    let state_path = root.join(INDEX_FILE);
+    let legacy_modules = root.join("modules");
+    if !state_path.exists() || !legacy_modules.is_dir() {
+        return Ok(false);
+    }
+    let bytes = fs::read(&state_path)?;
+    let legacy: LegacyState = serde_json::from_slice(&bytes)?;
+    let mut packages: BTreeMap<String, PackageRecord> = BTreeMap::new();
+    for module in legacy.modules.values().chain(legacy.previous.values()) {
+        let source = legacy_modules.join(&module.id).join(&module.version);
+        if !source.is_dir() {
+            continue;
+        }
+        let target = root.join(&module.id).join(&module.version);
+        if !target.exists() {
+            copy_directory(&source, &target)?;
+        }
+        let manifest = Manifest::load(&target.join(MANIFEST_ENTRY)).map_err(|error| {
+            InstallError::State(format!("миграция {}: {error}", target.display()))
+        })?;
+        let platform = manifest
+            .entrypoints
+            .keys()
+            .find(|key| key.starts_with("windows"))
+            .or_else(|| manifest.entrypoints.keys().next())
+            .cloned()
+            .unwrap_or_else(|| "windows-x64".to_owned());
+        let record = packages
+            .entry(module.id.clone())
+            .or_insert_with(|| PackageRecord {
+                id: module.id.clone(),
+                publisher: module.publisher.clone(),
+                active_version: module.version.clone(),
+                enabled: true,
+                versions: BTreeMap::new(),
+            });
+        record.versions.insert(
+            module.version.clone(),
+            VersionRecord {
+                platform,
+                package_sha256: "0".repeat(64),
+            },
+        );
+    }
+    if packages.is_empty() {
+        return Ok(false);
+    }
+    let index = StoreIndex {
+        version: INDEX_VERSION,
+        packages,
+    };
+    let store = PackageStore {
+        root: root.to_path_buf(),
+        lock: Mutex::new(()),
+    };
+    store.write_index(&index)?;
+    let legacy_backup = root.join("modules.legacy");
+    if !legacy_backup.exists() {
+        let _ = fs::rename(&legacy_modules, legacy_backup);
+    }
+    Ok(true)
+}
+
 impl PackageStore {
     /// Открывает или создаёт профиль. Повреждённый индекс не игнорируется.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, InstallError> {
@@ -133,6 +214,19 @@ impl PackageStore {
             root,
             lock: Mutex::new(()),
         };
+        let index_path = store.index_path();
+        if index_path.exists() {
+            let bytes = fs::read(&index_path)?;
+            if serde_json::from_slice::<StoreIndex>(&bytes).is_err()
+                && migrate_legacy_profile(&store.root)?
+            {
+                store.load_index()?;
+                return Ok(store);
+            }
+        } else if migrate_legacy_profile(&store.root)? {
+            store.load_index()?;
+            return Ok(store);
+        }
         store.load_index()?;
         Ok(store)
     }
@@ -966,5 +1060,36 @@ mod tests {
         assert!(store.remove(MODULE_ID).unwrap());
         assert!(!store.remove(MODULE_ID).unwrap());
         assert!(store.package(MODULE_ID).unwrap().is_none());
+    }
+
+    #[test]
+    fn opens_and_migrates_legacy_desktop_profile() {
+        let root = std::env::temp_dir().join(format!("um-legacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let module_dir = root.join("modules").join(MODULE_ID).join("0.1.0");
+        fs::create_dir_all(module_dir.join("bin")).unwrap();
+        fs::write(module_dir.join("bin/module"), b"legacy").unwrap();
+        let payload = b"legacy";
+        let manifest = manifest(PUBLISHER, "0.1.0", payload);
+        fs::write(
+            module_dir.join(MANIFEST_ENTRY),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("installed.json"),
+            format!(
+                r#"{{"modules":{{"{MODULE_ID}":{{"id":"{MODULE_ID}","name":"Контрольный пакет","publisher":"{PUBLISHER}","version":"0.1.0","entrypoint":"x","manifestPath":"x"}}}},"previous":{{}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let store = PackageStore::open(&root).unwrap();
+        let package = store
+            .package(MODULE_ID)
+            .unwrap()
+            .expect("мигрированный пакет");
+        assert_eq!(package.version, "0.1.0");
+        assert!(package.executable.is_file());
     }
 }

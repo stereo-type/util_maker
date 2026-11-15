@@ -36,7 +36,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env XWIN_CACHE_DIR=/workspace/$(WINDOWS_CACHE)/xwin \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
-.PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check \
+.PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check task-summary \
 	version check-version bump-version build-windows-rise icons screenshot-check control-samples example-package package-export package-install windows-image build-windows
 
 help:
@@ -48,6 +48,7 @@ help:
 		'make lint  — Clippy с ошибками вместо предупреждений' \
 		'make test  — тесты workspace, включая IPC контрольного модуля' \
 		'make check  — сверка версии + fmt + lint + test' \
+		'make task-summary  — обновить сводку незавершённых задач по разделам' \
 		'make version  — показать версию и тип сборки' \
 		'make bump-version VERSION=x.y.z  — поднять версию в Cargo.toml, tauri.conf.json и установщике' \
 		'make build-windows-rise  — поднять patch-версию и сразу собрать установщик' \
@@ -58,6 +59,9 @@ help:
 		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
 		'make package-install  — установить .umpkg в профиль: PACKAGE_OUTPUT, PACKAGE_PUBLIC_KEY, PACKAGE_PROFILE, PACKAGE_PLATFORM' \
 		'make build-windows  — собрать NSIS-установщик в dist/ (BUILD_KIND=dev)'
+
+task-summary:
+	python3 scripts/task-summary.py
 
 dev-image:
 	docker build --tag "$(DEV_IMAGE)" docker/dev

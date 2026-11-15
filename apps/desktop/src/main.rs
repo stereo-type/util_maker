@@ -760,9 +760,14 @@ fn main() {
             }
             spawn_hotkey_listener(app.handle().clone(), events);
             spawn_session_watchdog(app.handle().clone());
+            let open_settings_after_install = std::env::args().any(|arg| arg == "--open-settings");
             let first_run = mark_and_check_first_run(app.handle())?;
-            if first_run {
-                logging::write("первый запуск: открываю настройки");
+            if first_run || open_settings_after_install {
+                logging::write(if first_run {
+                    "первый запуск: открываю настройки"
+                } else {
+                    "запуск после установки: открываю настройки"
+                });
                 open_settings(app.handle());
             } else {
                 logging::write("повторный запуск: работаю только в трее");

@@ -55,8 +55,8 @@ def main():
             group = GROUPS[label]
             if group:
                 counts[group] += 1
-        if counts:
-            for group in ("Не сделано", "На ревью"):
+        for group in ("Не сделано", "На ревью"):
+            if counts[group] > 0:
                 lines.append(f"| [{name}]({target}) | {group} | {counts[group]} |")
 
     (TASKS / "open-tasks.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

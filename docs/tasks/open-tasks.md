@@ -9,10 +9,9 @@
 | [Скриншоты](blocks/plugins/screenshot/README.md) | Не сделано | 2 |
 | [Скриншоты](blocks/plugins/screenshot/README.md) | На ревью | 1 |
 | [Переводчик](blocks/plugins/translator/README.md) | Не сделано | 2 |
-| [Переводчик](blocks/plugins/translator/README.md) | На ревью | 0 |
-| [Desktop-хост](blocks/desktop/README.md) | Не сделано | 0 |
 | [Desktop-хост](blocks/desktop/README.md) | На ревью | 1 |
-| [SDK и протокол](blocks/sdk/README.md) | Не сделано | 1 |
-| [SDK и протокол](blocks/sdk/README.md) | На ревью | 0 |
+| [SDK и протокол](blocks/sdk/README.md) | Не сделано | 2 |
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | Не сделано | 1 |
-| [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | На ревью | 0 |
+| [Текст с экрана](blocks/plugins/screen-ocr/README.md) | Не сделано | 4 |
+| [QR-коды](blocks/plugins/qr-code/README.md) | Не сделано | 5 |
+| [Пипетка цвета](blocks/plugins/color-picker/README.md) | Не сделано | 3 |

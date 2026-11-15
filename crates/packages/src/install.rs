@@ -597,6 +597,14 @@ mod tests {
     }
 
     fn package(manifest: &Manifest, payload: &[u8], signer: &SigningKey) -> Vec<u8> {
+        package_with_files(manifest, &[("bin/module", payload)], signer)
+    }
+
+    fn package_with_files(
+        manifest: &Manifest,
+        files: &[(&str, &[u8])],
+        signer: &SigningKey,
+    ) -> Vec<u8> {
         let manifest_bytes = serde_json::to_vec(manifest).expect("манифест");
         let signature = signer.sign(&manifest_bytes);
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -609,8 +617,10 @@ mod tests {
             .start_file(SIGNATURE_ENTRY, options)
             .expect("подпись");
         writer.write_all(&signature.to_bytes()).expect("запись");
-        writer.start_file("bin/module", options).expect("файл");
-        writer.write_all(payload).expect("запись");
+        for (path, payload) in files {
+            writer.start_file(*path, options).expect("файл");
+            writer.write_all(payload).expect("запись");
+        }
         writer.finish().expect("архив").into_inner()
     }
 
@@ -707,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn same_version_from_another_publisher_is_rejected() {
+    fn another_publisher_for_known_id_is_rejected() {
         let temp = tempfile::tempdir().expect("каталог");
         let first_signer = signer(4);
         let other_signer = signer(5);
@@ -716,7 +726,7 @@ mod tests {
             ("org.example", &other_signer),
         ]);
         let first = manifest(PUBLISHER, "0.2.0", b"first");
-        let other = manifest("org.example", "0.2.0", b"other");
+        let other = manifest("org.example", "0.3.0", b"other");
 
         let store = PackageStore::open(temp.path()).expect("профиль");
         install(&store, &package(&first, b"first", &first_signer), &trust).expect("первый");
@@ -747,6 +757,50 @@ mod tests {
             installed[0].package_sha256,
             hex::encode(Sha256::digest(&first_package))
         );
+    }
+
+    #[test]
+    fn extraction_error_cleans_staging_and_keeps_active_version() {
+        let temp = tempfile::tempdir().expect("каталог");
+        let signer = signer(8);
+        let trust = trust(&[(PUBLISHER, &signer)]);
+        let active = manifest(PUBLISHER, "0.1.0", b"active");
+        let store = PackageStore::open(temp.path()).expect("профиль");
+        install(&store, &package(&active, b"active", &signer), &trust).expect("активная версия");
+
+        let mut broken = manifest(PUBLISHER, "0.2.0", b"a");
+        broken.files = vec![
+            PackageFile {
+                path: "a".to_owned(),
+                sha256: hex::encode(Sha256::digest(b"a")),
+            },
+            PackageFile {
+                path: "a/b".to_owned(),
+                sha256: hex::encode(Sha256::digest(b"b")),
+            },
+        ];
+        broken.entrypoints = BTreeMap::from([("linux-x64".to_owned(), "a/b".to_owned())]);
+        let error = install(
+            &store,
+            &package_with_files(&broken, &[("a", b"a"), ("a/b", b"b")], &signer),
+            &trust,
+        )
+        .expect_err("ошибка записи вложенного файла");
+        assert!(matches!(
+            error,
+            InstallError::Verification(PackageError::Io(_))
+        ));
+
+        let installed = store.installed().expect("каталог");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].version, "0.1.0");
+        assert!(!temp.path().join(MODULE_ID).join("0.2.0").exists());
+        let leftovers = fs::read_dir(temp.path())
+            .expect("профиль")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".install-"))
+            .count();
+        assert_eq!(leftovers, 0);
     }
 
     #[test]

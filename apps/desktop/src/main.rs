@@ -7,6 +7,7 @@
 //! и показывают результат в компактном окне. Настройки создаются по запросу и
 //! уничтожаются при закрытии; без окон процесс остаётся в трее.
 
+mod editor_placement;
 mod logging;
 mod package_manager;
 
@@ -39,8 +40,8 @@ use util_maker_platform::{
     RegisterFailure, ScreenSource, SettingsStore,
 };
 use util_maker_sdk::{
-    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, Manifest,
-    SettingsSchema,
+    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, FrameRegion,
+    Manifest, MonitorGeometry, SettingsSchema,
 };
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
@@ -66,6 +67,7 @@ struct OverlayFrame {
     origin_y: i32,
     width: u32,
     height: u32,
+    monitors: Vec<MonitorGeometry>,
     data: Vec<u8>,
 }
 
@@ -1149,6 +1151,7 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
             origin_y: rect.y,
             width: rect.width,
             height: rect.height,
+            monitors: geometry.monitors.clone(),
             data,
         });
     }
@@ -1194,12 +1197,18 @@ fn open_screenshot_editor(
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "кадр не захвачен".to_owned())?;
-    let (origin_x, origin_y, frame_width, frame_height) = {
+    let (origin_x, origin_y, frame_width, frame_height, monitors) = {
         let overlay = state.overlay.lock().map_err(|error| error.to_string())?;
         let frame = overlay
             .as_ref()
             .ok_or_else(|| "кадр не захвачен".to_owned())?;
-        (frame.origin_x, frame.origin_y, frame.width, frame.height)
+        (
+            frame.origin_x,
+            frame.origin_y,
+            frame.width,
+            frame.height,
+            frame.monitors.clone(),
+        )
     };
     if width < 3 || height < 3 || x < 0 || y < 0 {
         return Err("слишком маленькая область".to_owned());
@@ -1230,6 +1239,7 @@ fn open_screenshot_editor(
             origin_y,
             frame_width,
             frame_height,
+            &monitors,
         ) {
             logging::write(&format!("редактор снимка: {error}"));
         }
@@ -1248,14 +1258,21 @@ fn show_editor_window(
     origin_y: i32,
     frame_width: u32,
     frame_height: u32,
+    monitors: &[MonitorGeometry],
 ) -> Result<(), String> {
-    let editor_width = 1100.min(frame_width.saturating_sub(32)).max(640);
-    let editor_height = 760.min(frame_height.saturating_sub(32)).max(480);
-    let screen_right = origin_x + frame_width as i32;
-    let screen_bottom = origin_y + frame_height as i32;
-    let window_x = origin_x + (frame_width as i32 - editor_width as i32) / 2;
-    let window_y = origin_y + (frame_height as i32 - editor_height as i32) / 2;
-    let _ = (screen_right, screen_bottom, x, y);
+    let selection = FrameRegion {
+        x: origin_x.saturating_add(x),
+        y: origin_y.saturating_add(y),
+        width,
+        height,
+    };
+    let frame = FrameRegion {
+        x: origin_x,
+        y: origin_y,
+        width: frame_width,
+        height: frame_height,
+    };
+    let placement = editor_placement::place_editor(selection, monitors, frame);
     let window = WebviewWindowBuilder::new(
         app,
         "editor",
@@ -1269,10 +1286,10 @@ fn show_editor_window(
     .build()
     .map_err(|error| format!("редактор: {error}"))?;
     window
-        .set_position(PhysicalPosition::new(window_x, window_y))
+        .set_position(PhysicalPosition::new(placement.x, placement.y))
         .map_err(|error| format!("редактор position: {error}"))?;
     window
-        .set_size(PhysicalSize::new(editor_width, editor_height))
+        .set_size(PhysicalSize::new(placement.width, placement.height))
         .map_err(|error| format!("редактор size: {error}"))?;
     let _ = window.set_always_on_top(true);
     let _ = window.show();

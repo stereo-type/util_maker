@@ -117,6 +117,18 @@ pub trait PlatformHost {
         ))
     }
 
+    fn selection_wait(
+        &mut self,
+        context: &CallSession,
+        _params: &Value,
+    ) -> Result<Value, RpcError> {
+        Err(unsupported(
+            context,
+            host_methods::SELECTION_WAIT,
+            &Value::Null,
+        ))
+    }
+
     fn buffer_copy(&mut self, context: &CallSession, params: &Value) -> Result<Value, RpcError> {
         Err(unsupported(context, host_methods::BUFFER_COPY, params))
     }

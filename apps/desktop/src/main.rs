@@ -37,8 +37,8 @@ use util_maker_core::{
 };
 use util_maker_platform::{
     screen_service, ClipboardContent, ClipboardWriter, DpapiSecretStore, HotkeyEvent,
-    HotkeyService, NativeScreenService, RegisterFailure, SecretStore, SelectionSnapshot,
-    SelectionSource, SystemClipboard, UnsupportedSelection,
+    HotkeyService, NativeScreenService, RegisterFailure, ScreenSource, SecretStore,
+    SelectionSnapshot, SelectionSource, SystemClipboard, UnsupportedSelection,
 };
 use util_maker_sdk::{
     protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, FrameRef,
@@ -59,6 +59,13 @@ struct AppState {
     tray_actions: Mutex<BTreeMap<String, ActionRef>>,
     metrics: Mutex<DiagnosticsLog>,
     packages: Mutex<PackageManager>,
+    overlay: Mutex<Option<OverlayFrame>>,
+}
+
+struct OverlayFrame {
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
 }
 
 /// Каталог установленных модулей и реестр ядра.
@@ -676,6 +683,9 @@ fn main() {
             close_settings,
             close_result,
             copy_text,
+            get_overlay_frame,
+            copy_overlay_image,
+            close_overlay,
             get_autostart,
             set_autostart,
             hotkey_state_command,
@@ -716,6 +726,7 @@ fn main() {
                 tray_actions: Mutex::new(BTreeMap::new()),
                 metrics: Mutex::new(metrics),
                 packages: Mutex::new(packages),
+                overlay: Mutex::new(None),
             };
             app.manage(state);
             let (runtime, events) = ShortcutRuntime::start(app.handle())?;
@@ -1137,6 +1148,24 @@ impl PlatformHost for DesktopPlatform {
         Ok(value)
     }
 
+    fn selection_wait(
+        &mut self,
+        _context: &util_maker_core::CallSession,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
+        let timeout = params
+            .get("timeoutMs")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(5_000);
+        match self
+            .selection
+            .wait_for_selection(std::time::Duration::from_millis(timeout))
+        {
+            Some(text) => Ok(serde_json::json!({"state": "text", "text": text})),
+            None => Ok(serde_json::json!({"state": "empty"})),
+        }
+    }
+
     fn buffer_copy(
         &mut self,
         _context: &util_maker_core::CallSession,
@@ -1215,6 +1244,43 @@ impl PlatformHost for DesktopPlatform {
     }
 }
 
+fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
+    let screen = screen_service();
+    let geometry = screen.geometry().map_err(|error| error.message)?;
+    let rect = geometry.virtual_screen;
+    let raw = screen
+        .source()
+        .capture(rect)
+        .map_err(|error| error.to_string())?;
+    let mut data = Vec::with_capacity(rect.width as usize * rect.height as usize * 4);
+    for row in 0..rect.height as usize {
+        let start = row * raw.stride as usize;
+        data.extend_from_slice(&raw.pixels[start..start + rect.width as usize * 4]);
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.overlay.lock().map_err(|error| error.to_string())? = Some(OverlayFrame {
+            width: rect.width,
+            height: rect.height,
+            data,
+        });
+    }
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.close();
+    }
+    let builder = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
+        .title("Снять область")
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .position(rect.x as f64, rect.y as f64)
+        .inner_size(rect.width as f64, rect.height as f64);
+    builder
+        .build()
+        .map_err(|error| format!("overlay: {error}"))?;
+    Ok(())
+}
+
 fn invoke_action(
     app: &AppHandle,
     target: &ActionRef,
@@ -1246,7 +1312,40 @@ fn invoke_action(
 }
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
+    if target.module_id == "org.utilmaker.screenshot" && target.action_id == "capture-region" {
+        if let Err(error) = open_screenshot_overlay(app) {
+            show_result(
+                app,
+                LastResult {
+                    message: format!("Не удалось открыть редактор: {error}"),
+                    module_id: target.module_id,
+                    action_id: target.action_id,
+                    action_name: "Снять область".to_owned(),
+                    source: source.as_str().to_owned(),
+                    core_elapsed_ms: 0,
+                    since_event_ms: 0,
+                    status: "error".to_owned(),
+                },
+            );
+        }
+        return;
+    }
     let started = Instant::now();
+    if target.action_id == "translate" {
+        show_result(
+            app,
+            LastResult {
+                message: "Перевод…".to_owned(),
+                module_id: target.module_id.clone(),
+                action_id: target.action_id.clone(),
+                action_name: action_name_for(app, &target),
+                source: source.as_str().to_owned(),
+                core_elapsed_ms: 0,
+                since_event_ms: 0,
+                status: "progress".to_owned(),
+            },
+        );
+    }
     match invoke_action(app, &target, source) {
         Ok(outcome) => {
             let since_event = started.elapsed();
@@ -2239,6 +2338,19 @@ async fn invoke_target(
     target: ActionRef,
     source: Option<String>,
 ) -> Result<LastResult, String> {
+    if target.module_id == "org.utilmaker.screenshot" && target.action_id == "capture-region" {
+        open_screenshot_overlay(app)?;
+        return Ok(LastResult {
+            message: "Выделите область в открывшемся редакторе.".to_owned(),
+            module_id: target.module_id,
+            action_id: target.action_id,
+            action_name: "Снять область".to_owned(),
+            source: source.unwrap_or_else(|| "settings".to_owned()),
+            core_elapsed_ms: 0,
+            since_event_ms: 0,
+            status: "progress".to_owned(),
+        });
+    }
     let parsed = match source.as_deref() {
         Some("hotkey") => InvocationSource::Hotkey,
         _ => InvocationSource::Tray,
@@ -2321,6 +2433,53 @@ fn open_settings_command(app: AppHandle) {
 fn close_settings(app: AppHandle) {
     if let Some(window) = app.get_webview_window(SETTINGS_WINDOW) {
         let _ = window.close();
+    }
+}
+
+#[tauri::command]
+fn get_overlay_frame(app: AppHandle) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "состояние недоступно".to_owned())?;
+    let overlay = state.overlay.lock().map_err(|error| error.to_string())?;
+    let frame = overlay
+        .as_ref()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let mut data = String::with_capacity(frame.data.len() * 2);
+    for byte in &frame.data {
+        data.push_str(&format!("{byte:02x}"));
+    }
+    Ok(serde_json::json!({
+        "width": frame.width,
+        "height": frame.height,
+        "data": data,
+    }))
+}
+
+#[tauri::command]
+fn copy_overlay_image(width: u32, height: u32, rgba: String) -> Result<(), String> {
+    let bytes = (0..rgba.len() / 2)
+        .map(|index| u8::from_str_radix(&rgba[index * 2..index * 2 + 2], 16))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    SystemClipboard::new()
+        .write(&ClipboardContent::Image {
+            width,
+            height,
+            rgba: bytes,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn close_overlay(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.close();
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut overlay) = state.overlay.lock() {
+            *overlay = None;
+        }
     }
 }
 

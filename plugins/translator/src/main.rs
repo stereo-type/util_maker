@@ -106,7 +106,40 @@ impl Module for TranslatorModule {
                 format!("неизвестное действие: {}", request.action_id),
             ));
         }
-        let snapshot = host_snapshot(host);
+        let mut snapshot = host_snapshot(host);
+        if matches!(snapshot, SourceSnapshot::Empty) {
+            let waited = host
+                .request(
+                    "selection.wait",
+                    "selection.wait",
+                    json!({"timeoutMs": 5000}),
+                )
+                .ok();
+            snapshot = match waited
+                .as_ref()
+                .and_then(|value| value.get("state").and_then(Value::as_str))
+            {
+                Some("text") => waited
+                    .as_ref()
+                    .and_then(|value| value.get("text").and_then(Value::as_str))
+                    .map(|text| SourceSnapshot::Selected(text.to_owned()))
+                    .unwrap_or(SourceSnapshot::Empty),
+                Some("empty") => SourceSnapshot::Empty,
+                Some("unsupported") => SourceSnapshot::Unsupported,
+                Some("password") => SourceSnapshot::Password,
+                _ => SourceSnapshot::ContextLost,
+            };
+            if matches!(snapshot, SourceSnapshot::Empty) {
+                return Ok(InvokeResult::ok(
+                    "Вставьте или введите текст и явно подтвердите перевод.",
+                )
+                .with_data(json!({
+                    "callId": request.call_id,
+                    "outcome": "manual-input",
+                    "httpRequests": 0,
+                })));
+            }
+        }
         match self.selection.start(snapshot) {
             StartOutcome::Translate(text) => translate_with_host(host, request, &text),
             StartOutcome::Blocked(reason) => Ok(Self::blocked_result(reason, request)),

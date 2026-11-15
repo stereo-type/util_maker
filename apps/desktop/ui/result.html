@@ -58,13 +58,15 @@
           }
           document.getElementById("message").textContent = result.message;
           const status = document.getElementById("status");
-          status.textContent = result.status === "ok" ? "Успех" : "Ошибка";
-          status.className = "status" + (result.status === "ok" ? "" : " error");
+          const progress = result.status === "progress";
+          status.textContent = progress ? "Перевод…" : result.status === "ok" ? "Успех" : "Ошибка";
+          status.className = "status" + (result.status === "ok" || progress ? "" : " error");
           document.getElementById("meta").textContent =
             `${result.actionName} · источник: ${result.source} · ядро: ${result.coreElapsedMs} мс · ` +
             `от события до окна: ${result.sinceEventMs} мс`;
           const copy = document.getElementById("copy");
           copy.hidden = result.status !== "ok";
+          document.getElementById("close").hidden = progress;
           copy.onclick = async () => {
             try {
               await invoke("copy_text", { text: result.message });
@@ -73,7 +75,7 @@
             }
           };
           const disable = document.getElementById("disable");
-          disable.hidden = result.status === "ok";
+          disable.hidden = result.status === "ok" || progress;
           disable.onclick = async () => {
             try {
               await invoke("set_plugin_enabled", { pluginId: result.moduleId, enabled: false });

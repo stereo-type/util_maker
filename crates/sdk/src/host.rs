@@ -18,6 +18,7 @@ pub mod host_methods {
     pub const FRAME_CAPTURE: &str = "frame.capture";
     pub const FRAME_RELEASE: &str = "frame.release";
     pub const SELECTION_GET: &str = "selection.get";
+    pub const SELECTION_WAIT: &str = "selection.wait";
     pub const BUFFER_COPY: &str = "buffer.copy";
     pub const SETTINGS_READ: &str = "settings.read";
     pub const SECRET_READ: &str = "secret.read";

@@ -47,6 +47,8 @@ use util_maker_sdk::{
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
 const CONTROL_ACTION_ID: &str = "ping";
 const CONTROL_SHORTCUT: &str = "Ctrl+Shift+U";
+const SCREENSHOT_MODULE_ID: &str = "org.utilmaker.screenshot";
+const SCREENSHOT_SAVE_DIRECTORY: &str = "saveDirectory";
 const SETTINGS_WINDOW: &str = "settings";
 const RESULT_WINDOW: &str = "result";
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1427,8 +1429,60 @@ fn get_editor_image(
     ))
 }
 
-#[tauri::command]
-fn save_editor_image(width: u32, height: u32, rgba: String) -> Result<String, String> {
+fn default_screenshot_directory() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Pictures")
+        .join("Util Maker")
+}
+
+fn resolve_screenshot_directory(
+    configured: Option<&str>,
+    fallback: PathBuf,
+) -> Result<PathBuf, String> {
+    let configured = configured.unwrap_or_default().trim();
+    if configured.is_empty() {
+        return Ok(fallback);
+    }
+    let path = PathBuf::from(configured);
+    if !path.is_absolute() {
+        return Err(format!(
+            "Укажите полный путь к папке сохранения, например D:\\Скриншоты: {configured}"
+        ));
+    }
+    if path.exists() && !path.is_dir() {
+        return Err(format!(
+            "Путь сохранения не является папкой: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn screenshot_save_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "настройки сохранения недоступны".to_owned())?;
+    let values = state
+        .settings
+        .values(SCREENSHOT_MODULE_ID, None)
+        .map_err(|error| format!("настройки «Скриншотов»: {error}"))?;
+    resolve_screenshot_directory(
+        values
+            .get(SCREENSHOT_SAVE_DIRECTORY)
+            .and_then(serde_json::Value::as_str),
+        default_screenshot_directory(),
+    )
+}
+
+fn write_screenshot_png(
+    directory: &Path,
+    width: u32,
+    height: u32,
+    rgba: &str,
+) -> Result<PathBuf, String> {
     if width == 0 || height == 0 || rgba.len() != width as usize * height as usize * 4 * 2 {
         return Err("некорректный размер изображения".to_owned());
     }
@@ -1449,19 +1503,31 @@ fn save_editor_image(width: u32, height: u32, rgba: String) -> Result<String, St
             .write_image_data(&bytes)
             .map_err(|error| error.to_string())?;
     }
-    let base = std::env::var_os("USERPROFILE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Pictures")
-        .join("Util Maker");
-    std::fs::create_dir_all(&base).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(directory).map_err(|error| {
+        format!(
+            "не удалось создать папку сохранения {}: {error}",
+            directory.display()
+        )
+    })?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_millis())
         .unwrap_or_default();
-    let path = base.join(format!("Screenshot-{stamp}.png"));
-    std::fs::write(&path, png).map_err(|error| error.to_string())?;
-    Ok(path.display().to_string())
+    let path = directory.join(format!("Screenshot-{stamp}.png"));
+    std::fs::write(&path, png)
+        .map_err(|error| format!("не удалось сохранить {}: {error}", path.display()))?;
+    Ok(path)
+}
+
+#[tauri::command]
+fn save_editor_image(
+    app: AppHandle,
+    width: u32,
+    height: u32,
+    rgba: String,
+) -> Result<String, String> {
+    let directory = screenshot_save_directory(&app)?;
+    write_screenshot_png(&directory, width, height, &rgba).map(|path| path.display().to_string())
 }
 
 #[tauri::command]
@@ -3158,6 +3224,52 @@ mod tests {
             include_bytes!("../icons/status-error.png").as_slice()
         );
         assert!(error_tip.contains("недоступно"));
+    }
+
+    #[test]
+    fn screenshot_save_directory_defaults_and_validates_custom_path() {
+        let fallback = temp_directory("screenshot-default");
+        assert_eq!(
+            resolve_screenshot_directory(None, fallback.clone()).expect("путь по умолчанию"),
+            fallback
+        );
+        assert_eq!(
+            resolve_screenshot_directory(Some("   "), fallback.clone()).expect("пустой путь"),
+            fallback
+        );
+
+        let custom = temp_directory("screenshot-custom");
+        assert_eq!(
+            resolve_screenshot_directory(Some(custom.to_str().expect("UTF-8")), fallback.clone())
+                .expect("пользовательский путь"),
+            custom
+        );
+
+        let nested = custom.join("nested").join("screenshots");
+        let saved = write_screenshot_png(&nested, 1, 1, "ff0000ff").expect("сохранение PNG");
+        assert!(saved.starts_with(&nested), "{}", saved.display());
+        assert!(saved.is_file());
+        assert_eq!(
+            std::fs::read(&saved).expect("PNG").get(..8),
+            Some([0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a].as_slice())
+        );
+
+        let relative = resolve_screenshot_directory(Some("Screenshots"), fallback.clone())
+            .expect_err("относительный путь должен отклоняться");
+        assert!(relative.contains("полный путь"), "{relative}");
+
+        let file = fallback.join("not-a-directory");
+        std::fs::write(&file, b"file").expect("файл");
+        let not_directory =
+            resolve_screenshot_directory(Some(file.to_str().expect("UTF-8")), fallback.clone())
+                .expect_err("путь к файлу должен отклоняться");
+        assert!(
+            not_directory.contains("не является папкой"),
+            "{not_directory}"
+        );
+
+        let _ = std::fs::remove_dir_all(fallback);
+        let _ = std::fs::remove_dir_all(custom);
     }
 
     #[test]

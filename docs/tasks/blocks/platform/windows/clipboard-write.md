@@ -1,6 +1,6 @@
 # Записывать изображение и текст в буфер обмена Windows
 
-**Статус** — 👁️ На ревью
+**Статус** — ✅ Выполнена
 
 [Этап 3 плана развития](../../../../roadmap.md#3-довести-оба-действия-до-результата-в-windows) · [ТЗ блока](../../../../blocks/platform/windows/README.md)
 
@@ -24,3 +24,5 @@
 - `SystemClipboard`: `CF_UNICODETEXT` и `CF_DIB` (32-бит BGRA снизу вверх).
 - Занятый буфер возвращает повторяемую ошибку, ресурсы освобождаются.
 - `buffer.copy` подключён к `PlatformHost`; хост и overlay используют один адаптер.
+
+Ревью: `write_text` и `write_image` (CF_UNICODETEXT/CF_DIB) в `crates/platform/src/clipboard.rs`; запись подключена к `buffer.copy` и overlay.

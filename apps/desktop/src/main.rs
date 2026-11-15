@@ -614,6 +614,7 @@ fn main() {
             rollback_package,
             remove_package,
             set_plugin_enabled,
+            change_action_shortcut,
             change_control_shortcut,
             quit_app
         ])
@@ -1494,6 +1495,71 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     output
+}
+
+#[tauri::command]
+fn change_action_shortcut(
+    app: AppHandle,
+    module_id: String,
+    action_id: String,
+    combo: String,
+) -> Result<String, String> {
+    let normalized = util_maker_core::hotkeys::Hotkey::parse(&combo)
+        .map_err(|error| error.to_string())?
+        .canonical();
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return Err("служба сочетаний недоступна".to_owned());
+    };
+    let target = ActionRef::new(module_id.clone(), action_id.clone());
+    let (id, old_combo) = {
+        let registrations = runtime
+            .registrations
+            .lock()
+            .map_err(|error| error.to_string())?;
+        registrations
+            .iter()
+            .find(|(_, registration)| {
+                registration.target.module_id == module_id
+                    && registration.target.action_id == action_id
+            })
+            .map(|(id, registration)| (*id, Some(registration.combo.clone())))
+            .unwrap_or_else(|| (runtime.next_id.fetch_add(1, Ordering::SeqCst), None))
+    };
+    if old_combo.as_deref() == Some(normalized.as_str()) {
+        return Ok(normalized);
+    }
+    let service = runtime.service.lock().expect("служба сочетаний");
+    if old_combo.is_some() {
+        service.unregister(id);
+    }
+    match service.register(&normalized, id) {
+        Ok(()) => {
+            drop(service);
+            if let Ok(mut registrations) = runtime.registrations.lock() {
+                registrations.insert(
+                    id,
+                    Registration {
+                        combo: normalized.clone(),
+                        target,
+                    },
+                );
+            }
+            if module_id == CONTROL_MODULE_ID {
+                *runtime.combo.lock().expect("сочетание") = normalized.clone();
+                runtime.registered.store(true, Ordering::SeqCst);
+                runtime.paused.store(false, Ordering::SeqCst);
+                set_shortcut_status(&app, "зарегистрировано");
+                save_shortcut(&app, &normalized);
+            }
+            Ok(normalized)
+        }
+        Err(error) => {
+            if let Some(old) = old_combo {
+                let _ = service.register(&old, id);
+            }
+            Err(register_failure_message(error))
+        }
+    }
 }
 
 #[tauri::command]

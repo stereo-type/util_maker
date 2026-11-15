@@ -363,15 +363,11 @@
         run.className = "primary";
         run.textContent = "Вызвать";
         run.addEventListener("click", () => invokeAction(plugin, action));
-        if (plugin.id === "org.utilmaker.control") {
-          const edit = document.createElement("button");
-          edit.type = "button";
-          edit.textContent = "Изменить сочетание";
-          edit.addEventListener("click", () => openHotkey(plugin, action));
-          right.append(run, edit);
-        } else {
-          right.append(run);
-        }
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Изменить сочетание";
+        edit.addEventListener("click", () => openHotkey(plugin, action));
+        right.append(run, edit);
         top.append(text, right);
         card.append(top);
         return card;
@@ -582,7 +578,11 @@
       async function saveHotkey() {
         if (!hotkeyTarget) return;
         try {
-          await invoke("change_control_shortcut", { combo: elements.input.value });
+          await invoke("change_action_shortcut", {
+            moduleId: hotkeyTarget.pluginId,
+            actionId: hotkeyTarget.actionId,
+            combo: elements.input.value,
+          });
           closeHotkey();
           await loadPlugins();
         } catch (error) {

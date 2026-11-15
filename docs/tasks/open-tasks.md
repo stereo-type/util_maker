@@ -11,7 +11,7 @@
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | Не сделано | 1 |
 | [Текст с экрана](blocks/plugins/screen-ocr/README.md) | Не сделано | 2 |
 | [Текст с экрана](blocks/plugins/screen-ocr/README.md) | На ревью | 2 |
-| [QR-коды](blocks/plugins/qr-code/README.md) | Не сделано | 4 |
-| [QR-коды](blocks/plugins/qr-code/README.md) | На ревью | 1 |
+| [QR-коды](blocks/plugins/qr-code/README.md) | Не сделано | 3 |
+| [QR-коды](blocks/plugins/qr-code/README.md) | На ревью | 2 |
 | [Пипетка цвета](blocks/plugins/color-picker/README.md) | Не сделано | 1 |
 | [Пипетка цвета](blocks/plugins/color-picker/README.md) | На ревью | 2 |

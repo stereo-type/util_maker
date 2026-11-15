@@ -4620,7 +4620,9 @@ version = "0.4.24"
 dependencies = [
  "qrcodegen",
  "rqrr",
+ "serde_json",
  "thiserror 2.0.21",
+ "util-maker-sdk",
 ]
 
 [[package]]

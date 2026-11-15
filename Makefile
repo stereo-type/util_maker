@@ -37,7 +37,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check task-summary \
-	version check-version bump-version build-windows-rise icons screenshot-check color-picker-check color-picker-reference screen-ocr-check screen-ocr-reference qr-code-check \
+	version check-version bump-version build-windows-rise icons screenshot-check color-picker-check color-picker-reference screen-ocr-check screen-ocr-reference qr-code-check qr-code-reference \
 	control-samples example-package package-export package-install windows-image build-windows
 
 help:
@@ -59,7 +59,8 @@ help:
 		'make color-picker-reference  — пересоздать эталон пипетки' \
 		'make screen-ocr-check  — обрезка, Tesseract, эталон и процесс OCR' \
 		'make screen-ocr-reference  — пересоздать эталон OCR' \
-		'make qr-code-check  — кодирование, отрисовка и независимое чтение QR' \
+		'make qr-code-check  — кодирование, отрисовка, декодирование и эталоны QR' \
+		'make qr-code-reference  — пересоздать эталоны QR' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
 		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
@@ -157,6 +158,9 @@ screen-ocr-reference: dev-image
 
 qr-code-check: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo test -p util-maker-qr-code"
+
+qr-code-reference: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "python3 scripts/make-qr-code-reference.py"
 
 control-samples: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "CONTROL_SAMPLES_DIR='$(CONTROL_SAMPLES_DIR)' CONTROL_SAMPLE_VERSIONS='$(CONTROL_SAMPLE_VERSIONS)' CONTROL_SAMPLE_PLATFORM='$(CONTROL_SAMPLE_PLATFORM)' sh /workspace/scripts/make-control-samples.sh"

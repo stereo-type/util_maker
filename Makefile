@@ -55,7 +55,7 @@ help:
 		'make build-windows-rise  — поднять patch-версию и сразу собрать установщик' \
 		'make icons  — пересоздать иконки приложения' \
 		'make screenshot-check  — процесс, редактор и манифест плагина «Скриншоты»' \
-		'make color-picker-check  — выборка пикселя, форматы и эталон пипетки' \
+		'make color-picker-check  — выборка, лупа, копирование и граница процесса пипетки' \
 		'make color-picker-reference  — пересоздать эталон пипетки' \
 		'make screen-ocr-check  — обрезка, Tesseract и эталон OCR' \
 		'make screen-ocr-reference  — пересоздать эталон OCR' \
@@ -143,7 +143,7 @@ screenshot-check: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-screenshots && cargo test -p util-maker-core --test screenshot_module"
 
 color-picker-check: dev-image
-	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo test -p util-maker-color-picker"
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-color-picker && cargo test -p util-maker-core --test color_picker_module"
 
 color-picker-reference:
 	python3 scripts/make-color-picker-reference.py

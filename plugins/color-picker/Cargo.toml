@@ -6,9 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 description = "Пипетка цвета: выборка пикселя BGRA8 и форматы HEX/RGB"
 
+[[bin]]
+name = "color-picker-module"
+path = "src/main.rs"
+
 [dependencies]
+serde_json.workspace = true
 thiserror.workspace = true
 util-maker-sdk.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

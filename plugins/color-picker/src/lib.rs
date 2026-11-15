@@ -9,6 +9,14 @@ use util_maker_sdk::{
     FrameOrigin, FrameRef, FrameRegion, MonitorGeometry, ScreenGeometry, FRAME_FORMAT_BGRA8,
 };
 
+pub mod picker;
+
+pub use picker::{
+    Arrow, BlockReason, CaptureError, CapturedFrame, ClipboardError, ClipboardSink, CopyOutcome,
+    FrameData, FrameLease, FrameRect, FrameSource, Loupe, LoupeError, Picker, PickerError,
+    PickerPhase, PickerSession, StartOutcome,
+};
+
 /// Размер одного пикселя BGRA8 в байтах.
 pub const BYTES_PER_PIXEL: usize = 4;
 
@@ -60,7 +68,7 @@ impl MonitorRect {
         self.width > 0 && self.height > 0
     }
 
-    fn from_sdk(monitor: &MonitorGeometry) -> Self {
+    pub(crate) fn from_sdk(monitor: &MonitorGeometry) -> Self {
         Self::from_region(monitor.rect)
     }
 
@@ -321,6 +329,34 @@ impl<'a> FrameView<'a> {
     /// из промежутка между мониторами и пиксель за пределами снимка дают разные
     /// ошибки и никогда не читаются как случайный сосед.
     pub fn sample(&self, x: i32, y: i32) -> Result<Rgb, SampleError> {
+        FrameLayout {
+            pixels: self.pixels,
+            width: self.width,
+            height: self.height,
+            stride: self.stride,
+            origin: self.origin,
+            monitors: &self.monitors,
+        }
+        .sample(x, y)
+    }
+
+    /// Читает цвет в точке [`Point`].
+    pub fn sample_point(&self, point: Point) -> Result<Rgb, SampleError> {
+        self.sample(point.x, point.y)
+    }
+}
+
+struct FrameLayout<'a> {
+    pixels: &'a [u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    origin: Point,
+    monitors: &'a [MonitorRect],
+}
+
+impl FrameLayout<'_> {
+    fn sample(&self, x: i32, y: i32) -> Result<Rgb, SampleError> {
         let point = Point::new(x, y);
         if !self.monitors.iter().any(|monitor| monitor.contains(point)) {
             return Err(SampleError::OutsideMonitors { x, y });
@@ -347,11 +383,6 @@ impl<'a> FrameView<'a> {
             .get(offset..offset.saturating_add(BYTES_PER_PIXEL))
             .ok_or(SampleError::OutOfBounds)?;
         Ok(Rgb::from_bgra([pixel[0], pixel[1], pixel[2], pixel[3]]))
-    }
-
-    /// Читает цвет в точке [`Point`].
-    pub fn sample_point(&self, point: Point) -> Result<Rgb, SampleError> {
-        self.sample(point.x, point.y)
     }
 }
 

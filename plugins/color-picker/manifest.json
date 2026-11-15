@@ -1,0 +1,43 @@
+{
+  "manifestVersion": 1,
+  "id": "org.utilmaker.color-picker",
+  "publisher": "org.utilmaker",
+  "name": "Пипетка цвета",
+  "version": "0.4.11",
+  "hostApi": ">=1.0.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "color-picker-module.exe",
+    "linux-x64": "color-picker-module"
+  },
+  "icon": "assets/icon.png",
+  "capabilities": ["screen.capture", "clipboard.write", "settings.read"],
+  "actions": [
+    {
+      "id": "pick-color",
+      "name": "Скопировать цвет пикселя",
+      "description": "Выбрать пиксель на снимке экрана лупой и скопировать его цвет в HEX или CSS RGB",
+      "recommendedHotkeys": ["Ctrl+Shift+P"]
+    }
+  ],
+  "settings": {
+    "schemaVersion": 1,
+    "fields": [
+      {
+        "id": "format",
+        "label": "Формат цвета",
+        "type": "select",
+        "default": "hex",
+        "options": [
+          {
+            "value": "hex",
+            "label": "HEX (#RRGGBB)"
+          },
+          {
+            "value": "rgb",
+            "label": "CSS RGB (rgb(R, G, B))"
+          }
+        ]
+      }
+    ]
+  }
+}

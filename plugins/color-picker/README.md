@@ -4,7 +4,7 @@
 из кадра BGRA8, проверка геометрии мониторов и форматирование значения.
 
 - Крейт — `util-maker-color-picker`;
-- действие и манифест появятся в задаче [«Выбирать пиксель лупой»](../../docs/tasks/blocks/plugins/color-picker/pick-and-copy.md);
+- процесс — `color-picker-module`, действие — `pick-color`; манифест и настройка формата — в [`manifest.json`](manifest.json);
 - формат по умолчанию — `#RRGGBB`, второй вариант — `rgb(R, G, B)`;
 - эталон и таблица координат — в [`reference/`](reference/README.md).
 
@@ -43,4 +43,41 @@ make color-picker-check
 make test
 ```
 
-Отдельная цель `make color-picker-check` проверяет только этот крейт.
+Цель `make color-picker-check` проверяет этот крейт и IPC-границу процесса.
+
+## Процесс и манифест
+
+`manifest.json` объявляет издателя `org.utilmaker`, возможности `screen.capture`,
+`clipboard.write`, `settings.read`, действие `pick-color` и настройку
+«Формат цвета» с вариантами `hex` (по умолчанию) и `rgb`.
+
+`color-picker-module` читает формат через `settings.read`, запрашивает один
+`frame.capture` и сразу вызывает `frame.release`. Передача байтов кадра
+дочернему процессу ещё не реализована в SDK, поэтому после освобождения ссылки
+процесс возвращает код `2002` с причиной `frame-bytes-unavailable`. Это явная
+граница, а не поддельный результат.
+
+## Выбор и лупа
+
+`picker.rs` содержит переносимое состояние поверх `FrameData`:
+
+- `Picker::start` получает кадр один раз, освобождает `FrameLease` и открывает
+  `PickerSession`;
+- `PickerSession::set_point` и `move_arrow` читают только копию кадра;
+- `Loupe::for_point` строит окно без сглаживания, сдвигает его у края и
+  возвращает координаты перекрестия;
+- `PickerSession::copy` пишет ровно показанную строку через `ClipboardSink`,
+  сохраняет точку при занятом буфере и запрещает копирование после смены
+  геометрии;
+- `PickerSession::escape` не меняет буфер, `Picker::finish` освобождает кадр.
+
+## Проверка
+
+```sh
+make color-picker-check
+make test
+```
+
+`make color-picker-check` проверяет переносимую выборку, лупу, копирование и
+границу процесса. `make test` дополнительно запускает IPC-тест
+`color-picker-module`.

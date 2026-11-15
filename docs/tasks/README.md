@@ -2,6 +2,8 @@
 
 [План развития](../roadmap.md) определяет, для каких результатов предстоит завести карточки. Здесь собраны очереди уже поставленных задач.
 
+Результаты проверки 0.4.5 — [windows-0.4.5-findings.md](windows-0.4.5-findings.md).
+
 Единый чек-лист приёмки Windows — [windows-acceptance.md](windows-acceptance.md).
 
 План ручной проверки оставшихся задач — [windows-review-plan.md](windows-review-plan.md).

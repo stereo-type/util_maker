@@ -4784,6 +4784,7 @@ name = "util-maker-translator"
 version = "0.4.3"
 dependencies = [
  "serde_json",
+ "util-maker-platform",
  "util-maker-sdk",
 ]
 

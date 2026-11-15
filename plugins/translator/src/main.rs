@@ -66,10 +66,8 @@ impl Module for TranslatorModule {
             ));
         }
 
-        // UI Automation подключается в задаче о выделении исходного окна.
-        // До этого явно фиксируем потерю контекста: это гарантирует, что
-        // ни один провайдер не получит текст и сетевой запрос не возникнет.
-        match self.selection.start(SourceSnapshot::ContextLost) {
+        let snapshot = selection_snapshot();
+        match self.selection.start(snapshot) {
             StartOutcome::Blocked(reason) => Ok(Self::blocked_result(reason, request)),
             StartOutcome::AwaitSelection => Ok(InvokeResult::ok(
                 "Выделите текст в исходном приложении одним жестом мыши.",
@@ -93,6 +91,25 @@ impl Module for TranslatorModule {
             )),
         }
     }
+}
+
+fn selection_snapshot() -> SourceSnapshot {
+    #[cfg(windows)]
+    {
+        use util_maker_platform::SelectionSource;
+        if let Ok(mut source) = util_maker_platform::WindowsSelectionSource::new() {
+            return match source.snapshot() {
+                util_maker_platform::SelectionSnapshot::Text(text) => {
+                    SourceSnapshot::Selected(text)
+                }
+                util_maker_platform::SelectionSnapshot::Empty => SourceSnapshot::Empty,
+                util_maker_platform::SelectionSnapshot::Unsupported => SourceSnapshot::Unsupported,
+                util_maker_platform::SelectionSnapshot::Password => SourceSnapshot::Password,
+                util_maker_platform::SelectionSnapshot::ContextLost => SourceSnapshot::ContextLost,
+            };
+        }
+    }
+    SourceSnapshot::ContextLost
 }
 
 fn main() {

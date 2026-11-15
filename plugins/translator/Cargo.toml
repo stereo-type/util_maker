@@ -13,3 +13,6 @@ path = "src/main.rs"
 [dependencies]
 serde_json.workspace = true
 util-maker-sdk.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+util-maker-platform = { path = "../../crates/platform" }

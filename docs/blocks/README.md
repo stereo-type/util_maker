@@ -6,15 +6,15 @@
 
 | Компонент | Ответственность по ТЗ | Очередь |
 | --- | --- | --- |
-| [Ядро](core/README.md) | Реестр действий, IPC и жизненный цикл процессов, привязки шорткеев, диагностика. | [Задачи](../tasks/blocks/core/README.md) |
-| [Desktop-хост](desktop/README.md) | Трей, окна, команды Tauri, отображение настроек и результатов. | [Задачи](../tasks/blocks/desktop/README.md) |
+| [Ядро](core/README.md) | Реестр действий, IPC и жизненный цикл процессов, плагины-расширения, привязки шорткеев, диагностика. | [Задачи](../tasks/blocks/core/README.md) |
+| [Desktop-хост](desktop/README.md) | Трей, окна, команды Tauri, отображение настроек, результатов и плагинов микроприложений. | [Задачи](../tasks/blocks/desktop/README.md) |
 | [Адаптер Windows](platform/windows/README.md) | Регистрация сочетаний, работа с сессией, выделением, экраном и буфером через системный адаптер. | [Задачи](../tasks/blocks/platform/windows/README.md) |
-| [SDK и протокол](sdk/README.md) | Схема манифеста, совместимость API и сообщения JSON-RPC между хостом и плагином. | [Задачи](../tasks/blocks/sdk/README.md) |
-| [Пакеты](packages/README.md) | Формат .umpkg, подпись и проверка, установка, обновление и откат. | [Задачи](../tasks/blocks/packages/README.md) |
+| [SDK и протокол](sdk/README.md) | Схема манифеста и расширений, совместимость API и сообщения JSON-RPC между хостом и плагином. | [Задачи](../tasks/blocks/sdk/README.md) |
+| [Пакеты](packages/README.md) | Формат .umpkg, подпись и проверка, установка, обновление и откат обычных пакетов и плагинов-расширений. | [Задачи](../tasks/blocks/packages/README.md) |
 | [Контрольный плагин](plugins/control/README.md) | Эталонный процесс для проверки вызова ping из хоста. | [Задачи](../tasks/blocks/plugins/control/README.md) |
 | [Скриншоты](plugins/screenshot/README.md) | Выбор области, аннотации и копирование кадра. | [Задачи](../tasks/blocks/plugins/screenshot/README.md) |
 | [Переводчик](plugins/translator/README.md) | Получение выбранного текста, выбор профиля и показ результата. | [Задачи](../tasks/blocks/plugins/translator/README.md) |
-| [Провайдеры переводчика](plugins/translator/providers/README.md) | HTTP-запросы к Яндексу и Google, проверка профиля и разбор ошибок. | [Задачи](../tasks/blocks/plugins/translator/providers/README.md) |
+| [Провайдеры переводчика](plugins/translator/providers/README.md) | HTTP-запросы к Яндексу и Google, проверка профиля и разбор ошибок; целевая поставка — отдельными плагинами-расширениями. | [Задачи](../tasks/blocks/plugins/translator/providers/README.md) |
 | [Текст с экрана](plugins/screen-ocr/README.md) | Локальное OCR выбранной области, правка и копирование распознанного текста. | [Задачи](../tasks/blocks/plugins/screen-ocr/README.md) |
 | [QR-коды](plugins/qr-code/README.md) | Показ QR из текста и чтение QR из области экрана. | [Задачи](../tasks/blocks/plugins/qr-code/README.md) |
 | [Пипетка цвета](plugins/color-picker/README.md) | Выбор пикселя с лупой и копирование значения в HEX или RGB. | [Задачи](../tasks/blocks/plugins/color-picker/README.md) |

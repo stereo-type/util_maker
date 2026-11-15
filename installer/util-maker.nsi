@@ -21,7 +21,7 @@ Unicode true
 !include "LogicLib.nsh"
 
 !ifndef VERSION
-    !define VERSION "0.4.21"
+    !define VERSION "0.4.22"
 !endif
 !ifndef BUILD_KIND
     !define BUILD_KIND "dev"

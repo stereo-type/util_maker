@@ -3,7 +3,7 @@
   "id": "org.utilmaker.screenshot",
   "publisher": "org.utilmaker",
   "name": "Скриншоты",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "hostApi": ">=1.0.0 <2.0.0",
   "entrypoints": {
     "windows-x64": "screenshot-plugin.exe",

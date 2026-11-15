@@ -687,6 +687,7 @@ fn main() {
             get_overlay_frame,
             get_overlay_geometry,
             get_editor_image,
+            save_editor_image,
             open_screenshot_editor,
             copy_overlay_image,
             close_overlay,
@@ -1248,16 +1249,13 @@ fn show_editor_window(
     frame_width: u32,
     frame_height: u32,
 ) -> Result<(), String> {
-    let editor_width = width.max(360);
-    let editor_height = height.saturating_add(74);
+    let editor_width = 1100.min(frame_width.saturating_sub(32)).max(640);
+    let editor_height = 760.min(frame_height.saturating_sub(32)).max(480);
     let screen_right = origin_x + frame_width as i32;
     let screen_bottom = origin_y + frame_height as i32;
-    let window_x = (origin_x + x)
-        .min(screen_right - editor_width as i32)
-        .max(origin_x);
-    let window_y = (origin_y + y)
-        .min(screen_bottom - editor_height as i32)
-        .max(origin_y);
+    let window_x = origin_x + (frame_width as i32 - editor_width as i32) / 2;
+    let window_y = origin_y + (frame_height as i32 - editor_height as i32) / 2;
+    let _ = (screen_right, screen_bottom, x, y);
     let window = WebviewWindowBuilder::new(
         app,
         "editor",
@@ -1327,6 +1325,43 @@ fn get_editor_image(
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(png)
     ))
+}
+
+#[tauri::command]
+fn save_editor_image(width: u32, height: u32, rgba: String) -> Result<String, String> {
+    if width == 0 || height == 0 || rgba.len() != width as usize * height as usize * 4 * 2 {
+        return Err("некорректный размер изображения".to_owned());
+    }
+    let mut bytes = Vec::with_capacity(width as usize * height as usize * 4);
+    for index in 0..width as usize * height as usize * 4 {
+        let start = index * 2;
+        bytes.push(
+            u8::from_str_radix(&rgba[start..start + 2], 16).map_err(|error| error.to_string())?,
+        );
+    }
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(&bytes)
+            .map_err(|error| error.to_string())?;
+    }
+    let base = std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Pictures")
+        .join("Util Maker");
+    std::fs::create_dir_all(&base).map_err(|error| error.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or_default();
+    let path = base.join(format!("Screenshot-{stamp}.png"));
+    std::fs::write(&path, png).map_err(|error| error.to_string())?;
+    Ok(path.display().to_string())
 }
 
 #[tauri::command]

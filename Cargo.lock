@@ -4457,7 +4457,7 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "util-maker-control-module"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "serde_json",
  "util-maker-sdk",
@@ -4465,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-core"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "semver",
  "serde",
@@ -4476,7 +4476,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-desktop"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "base64 0.22.1",
  "png 0.17.16",
@@ -4502,14 +4502,14 @@ dependencies = [
 
 [[package]]
 name = "util-maker-fixture-module"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "util-maker-packages"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -4526,7 +4526,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-platform"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "serde",
  "serde_json",
@@ -4540,7 +4540,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-providers"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "reqwest",
  "serde",
@@ -4550,7 +4550,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-screenshots"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "image",
  "serde_json",
@@ -4560,7 +4560,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-sdk"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "semver",
  "serde",
@@ -4570,7 +4570,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-translator"
-version = "0.4.21"
+version = "0.4.22"
 dependencies = [
  "serde",
  "serde_json",

@@ -110,7 +110,7 @@
 
 ## 9. Метрики
 
-- [ ] `.\scripts\measure-windows.ps1 -InvokeBenchmark -InvokeCount 50`.
+- [ ] `.\scripts\measure-windows.ps1 -InvokeBenchmark -InvokeCount 50 -Hotkey "Ctrl+Shift+9"` (или фактическое сочетание действия).
 - [ ] Ожидается: 50 холодных вызовов выполняются автоматически.
 - [ ] Вывод содержит p95 отдельно по `moduleId + actionId` и `cold=true/false`.
 - [ ] Виден размер каждой выборки; неполная выборка отмечена.

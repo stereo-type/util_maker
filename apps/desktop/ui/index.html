@@ -178,7 +178,7 @@
 
       <section class="card" aria-labelledby="package-title">
         <h2 id="package-title">Установка пакета</h2>
-        <p class="hint">Укажите путь к .umpkg, издателя и открытый ключ Ed25519 (64 hex-символа).</p>
+        <p class="hint">Перетащите .umpkg в это окно или укажите путь, издателя и открытый ключ Ed25519 (64 hex-символа).</p>
         <label class="check" style="display: block; margin-top: 10px">
           <span>Файл пакета</span>
           <input id="package-path" class="hotkey-input" type="text" autocomplete="off" style="margin-top: 6px" placeholder="D:\Util Maker\control.umpkg" />
@@ -190,6 +190,10 @@
         <label class="check" style="display: block; margin-top: 10px">
           <span>Открытый ключ</span>
           <input id="package-key" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" style="margin-top: 6px" placeholder="64 hex-символа" />
+        </label>
+        <label class="check" style="display: block; margin-top: 12px">
+          <input type="checkbox" id="package-confirm" />
+          Подтверждаю отпечаток ключа издателя
         </label>
         <div class="actions">
           <button id="preview-package" type="button">Проверить</button>
@@ -257,6 +261,7 @@
         packageKey: document.getElementById("package-key"),
         packagePreview: document.getElementById("preview-package"),
         packageInstall: document.getElementById("install-package"),
+        packageConfirm: document.getElementById("package-confirm"),
         packageResult: document.getElementById("package-result"),
         log: document.getElementById("log-path"),
         config: document.getElementById("config-path"),
@@ -746,6 +751,11 @@
       }
 
       async function installPackage() {
+        if (!elements.packageConfirm.checked) {
+          elements.packageResult.className = "result error";
+          elements.packageResult.textContent = "Подтвердите отпечаток ключа издателя перед установкой.";
+          return;
+        }
         const args = packageArgs();
         elements.packageResult.className = "result";
         elements.packageResult.textContent = "Установка…";
@@ -782,8 +792,22 @@
         }
       }
 
-      elements.packagePreview.addEventListener("click", previewPackage);
+      elements.packagePreview.addEventListener("click", async () => {
+        elements.packageConfirm.checked = false;
+        await previewPackage();
+      });
       elements.packageInstall.addEventListener("click", installPackage);
+      if (window.__TAURI__?.event?.listen) {
+        window.__TAURI__.event.listen("tauri://drag-drop", (event) => {
+          const path = event.payload?.paths?.[0];
+          if (path) {
+            elements.packagePath.value = path;
+            elements.packageResult.className = "result";
+            elements.packageResult.textContent = `Выбран файл: ${path}`;
+            elements.packageConfirm.checked = false;
+          }
+        });
+      }
 
       elements.search?.addEventListener("input", () => {
         const query = elements.search.value.trim().toLowerCase();

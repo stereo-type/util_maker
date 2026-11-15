@@ -184,20 +184,20 @@ impl Registry {
             .cloned()
     }
 
+    /// Модули в общем порядке интерфейса: по отображаемому имени без учёта
+    /// регистра, при совпадении — по ID.
     pub fn modules(&self) -> Vec<ModuleEntry> {
-        self.modules
-            .read()
-            .expect("реестр модулей")
-            .values()
-            .cloned()
-            .collect()
+        let modules = self.modules.read().expect("реестр модулей");
+        ordered_modules(&modules).into_iter().cloned().collect()
     }
 
     /// Действия, доступные меню. Отключённые пакеты и их процессы не видны.
+    /// Модули идут в том же порядке, что и в `modules()`, действия внутри
+    /// модуля сохраняют порядок манифеста.
     pub fn actions(&self) -> Vec<ActionListing> {
         let modules = self.modules.read().expect("реестр модулей");
-        modules
-            .values()
+        ordered_modules(&modules)
+            .into_iter()
             .filter(|entry| entry.enabled)
             .flat_map(|entry| {
                 entry
@@ -220,8 +220,8 @@ impl Registry {
     /// Все действия, включая отключённые; нужно странице управления пакетами.
     pub fn all_actions(&self) -> Vec<ActionListing> {
         let modules = self.modules.read().expect("реестр модулей");
-        modules
-            .values()
+        ordered_modules(&modules)
+            .into_iter()
             .flat_map(|entry| {
                 entry
                     .manifest
@@ -612,6 +612,37 @@ impl HostHandler for PlainSession<'_> {
 impl HostSession for PlainSession<'_> {
     fn begin_call(&mut self, _context: &CallSession) {}
     fn finish_call(&mut self, _call_id: &str) {}
+}
+
+const RUSSIAN_ALPHABET: [char; 33] = [
+    'а', 'б', 'в', 'г', 'д', 'е', 'ё', 'ж', 'з', 'и', 'й', 'к', 'л', 'м', 'н', 'о', 'п', 'р', 'с',
+    'т', 'у', 'ф', 'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы', 'ь', 'э', 'ю', 'я',
+];
+
+fn module_name_key(name: &str) -> Vec<(u8, u32)> {
+    name.to_lowercase()
+        .chars()
+        .map(|character| {
+            RUSSIAN_ALPHABET
+                .iter()
+                .position(|letter| *letter == character)
+                .map(|index| (0, index as u32))
+                .unwrap_or((1, character as u32))
+        })
+        .collect()
+}
+
+fn ordered_modules(modules: &BTreeMap<String, ModuleEntry>) -> Vec<&ModuleEntry> {
+    let mut entries: Vec<_> = modules
+        .values()
+        .map(|entry| (module_name_key(&entry.manifest.name), entry))
+        .collect();
+    entries.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.manifest.id.cmp(&right.1.manifest.id))
+    });
+    entries.into_iter().map(|(_, entry)| entry).collect()
 }
 
 fn validate_entry(entry: &ModuleEntry) -> Result<(), CoreError> {

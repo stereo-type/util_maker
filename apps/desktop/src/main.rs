@@ -32,14 +32,17 @@ use util_maker_core::hotkeys::{
 };
 use util_maker_core::ipc::ModuleProcess;
 use util_maker_core::{
-    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
+    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, PlatformHost,
+    Registry,
 };
 use util_maker_platform::{
-    DpapiSecretStore, HotkeyEvent, HotkeyService, RegisterFailure, SecretStore,
+    screen_service, ClipboardContent, ClipboardWriter, DpapiSecretStore, HotkeyEvent,
+    HotkeyService, NativeScreenService, RegisterFailure, SecretStore, SelectionSnapshot,
+    SelectionSource, SystemClipboard, UnsupportedSelection,
 };
 use util_maker_sdk::{
-    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, Manifest,
-    SettingsSchema,
+    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, FrameRef,
+    FrameRequest, Manifest, SettingsSchema,
 };
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
@@ -672,6 +675,7 @@ fn main() {
             open_settings_command,
             close_settings,
             close_result,
+            copy_text,
             get_autostart,
             set_autostart,
             hotkey_state_command,
@@ -1068,6 +1072,149 @@ fn action_name_for(app: &AppHandle, target: &ActionRef) -> String {
         .unwrap_or_else(|| target.action_id.clone())
 }
 
+struct DesktopPlatform {
+    screen: NativeScreenService,
+    selection: Box<dyn SelectionSource>,
+    secrets: PathBuf,
+}
+
+impl DesktopPlatform {
+    fn new(app: &AppHandle) -> Self {
+        let selection: Box<dyn SelectionSource> = {
+            #[cfg(windows)]
+            {
+                match util_maker_platform::WindowsSelectionSource::new() {
+                    Ok(source) => Box::new(source),
+                    Err(_) => Box::new(UnsupportedSelection),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                Box::new(UnsupportedSelection)
+            }
+        };
+        let secrets = app
+            .path()
+            .app_local_data_dir()
+            .map(|directory| directory.join("secrets"))
+            .unwrap_or_else(|_| PathBuf::from("secrets"));
+        Self {
+            screen: screen_service(),
+            selection,
+            secrets,
+        }
+    }
+}
+
+impl PlatformHost for DesktopPlatform {
+    fn capture_frame(
+        &mut self,
+        context: &util_maker_core::CallSession,
+        request: &FrameRequest,
+    ) -> Result<FrameRef, util_maker_sdk::RpcError> {
+        self.screen.capture_frame(context, request)
+    }
+
+    fn release_frame(
+        &mut self,
+        context: &util_maker_core::CallSession,
+        buffer_id: &str,
+    ) -> Result<(), util_maker_sdk::RpcError> {
+        self.screen.release_frame(context, buffer_id)
+    }
+
+    fn selection_get(
+        &mut self,
+        _context: &util_maker_core::CallSession,
+    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
+        let value = match self.selection.snapshot() {
+            SelectionSnapshot::Text(text) => serde_json::json!({"state": "text", "text": text}),
+            SelectionSnapshot::Empty => serde_json::json!({"state": "empty"}),
+            SelectionSnapshot::Unsupported => serde_json::json!({"state": "unsupported"}),
+            SelectionSnapshot::Password => serde_json::json!({"state": "password"}),
+            SelectionSnapshot::ContextLost => serde_json::json!({"state": "context-lost"}),
+        };
+        Ok(value)
+    }
+
+    fn buffer_copy(
+        &mut self,
+        _context: &util_maker_core::CallSession,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
+        let content = if let Some(text) = params.get("text").and_then(|value| value.as_str()) {
+            ClipboardContent::Text(text.to_owned())
+        } else {
+            let width = params.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let height = params.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let rgba = params
+                .get("rgba")
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_u64().map(|value| value as u8))
+                        .collect()
+                })
+                .unwrap_or_default();
+            ClipboardContent::Image {
+                width,
+                height,
+                rgba,
+            }
+        };
+        SystemClipboard::new()
+            .write(&content)
+            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
+        Ok(serde_json::json!({"copied": true}))
+    }
+
+    fn settings_read(
+        &mut self,
+        _context: &util_maker_core::CallSession,
+        _params: &serde_json::Value,
+    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
+        let directory = self
+            .secrets
+            .parent()
+            .map(|parent| parent.join("plugin-settings"))
+            .unwrap_or_else(|| PathBuf::from("plugin-settings"));
+        let path = directory.join("org.utilmaker.translator.json");
+        if !path.exists() {
+            return Ok(serde_json::json!({}));
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))
+    }
+
+    fn secret_read(
+        &mut self,
+        _context: &util_maker_core::CallSession,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
+        let profile = params
+            .get("profile")
+            .and_then(|value| value.as_str())
+            .unwrap_or("default");
+        let name = params
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("apiKey");
+        let store = DpapiSecretStore::open(&self.secrets)
+            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
+        let value = store
+            .get(&util_maker_platform::SecretKey::new(
+                "org.utilmaker.translator",
+                profile,
+                name,
+            ))
+            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
+        Ok(serde_json::json!({"value": value}))
+    }
+}
+
 fn invoke_action(
     app: &AppHandle,
     target: &ActionRef,
@@ -1084,7 +1231,7 @@ fn invoke_action(
         .ok_or_else(|| "каталог модулей не готов".to_owned())?;
     // Диспетчер живёт ровно один вызов: кадры и буферы освобождаются вместе
     // с ним, а параллельные действия не блокируют друг друга на время IPC.
-    let mut host = HostDispatcher::new(util_maker_platform::screen_service());
+    let mut host = HostDispatcher::new(DesktopPlatform::new(app));
     state
         .catalog
         .registry
@@ -2175,6 +2322,13 @@ fn close_settings(app: AppHandle) {
     if let Some(window) = app.get_webview_window(SETTINGS_WINDOW) {
         let _ = window.close();
     }
+}
+
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    SystemClipboard::new()
+        .write(&ClipboardContent::Text(text))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

@@ -9,7 +9,12 @@
     "windows-x64": "translator-module.exe",
     "linux-x64": "translator-module"
   },
-  "capabilities": [],
+  "capabilities": [
+    "selection.read",
+    "settings.read",
+    "secret.read",
+    "buffer.copy"
+  ],
   "actions": [
     {
       "id": "translate",

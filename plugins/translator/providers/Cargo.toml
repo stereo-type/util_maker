@@ -10,4 +10,4 @@ description = "HTTP-адаптеры Яндекс.Переводчика и Goog
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }

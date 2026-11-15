@@ -6,9 +6,12 @@
 //! результата подключаются отдельной задачей, поэтому текущий снимок источника
 //! явно сообщает о потере контекста и не отправляет HTTP-запросов.
 
-use serde_json::json;
+use std::sync::atomic::AtomicBool;
+
+use serde_json::{json, Value};
+use util_maker_providers::{ProviderHub, ProviderSettings, ReqwestTransport};
 use util_maker_sdk::{
-    error_codes, run_stdio, InvokeRequest, InvokeResult, Module, ModuleInfo, RpcError,
+    error_codes, run_stdio, HostBridge, InvokeRequest, InvokeResult, Module, ModuleInfo, RpcError,
     HOST_API_VERSION,
 };
 use util_maker_translator::{BlockReason, SelectionController, SourceSnapshot, StartOutcome};
@@ -90,6 +93,115 @@ impl Module for TranslatorModule {
                 "процесс переводчика ещё не подключён к профилю провайдера",
             )),
         }
+    }
+
+    fn invoke_with_host(
+        &mut self,
+        request: &InvokeRequest,
+        host: &mut dyn HostBridge,
+    ) -> Result<InvokeResult, RpcError> {
+        if request.action_id != TRANSLATE_ACTION {
+            return Err(RpcError::new(
+                error_codes::ACTION_NOT_FOUND,
+                format!("неизвестное действие: {}", request.action_id),
+            ));
+        }
+        let snapshot = host_snapshot(host);
+        match self.selection.start(snapshot) {
+            StartOutcome::Translate(text) => translate_with_host(host, request, &text),
+            StartOutcome::Blocked(reason) => Ok(Self::blocked_result(reason, request)),
+            StartOutcome::AwaitSelection => Ok(InvokeResult::ok(
+                "Выделите текст в исходном приложении одним жестом мыши.",
+            )
+            .with_data(json!({
+                "callId": request.call_id,
+                "outcome": "awaiting-selection",
+                "httpRequests": 0,
+            }))),
+            StartOutcome::ManualInput => Ok(InvokeResult::ok(
+                "Вставьте или введите текст и явно подтвердите перевод.",
+            )
+            .with_data(json!({
+                "callId": request.call_id,
+                "outcome": "manual-input",
+                "httpRequests": 0,
+            }))),
+        }
+    }
+}
+
+fn host_snapshot(host: &mut dyn HostBridge) -> SourceSnapshot {
+    let value = match host.request("selection.read", "selection.get", json!({})) {
+        Ok(value) => value,
+        Err(_) => return SourceSnapshot::ContextLost,
+    };
+    match value.get("state").and_then(Value::as_str) {
+        Some("text") => value
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| SourceSnapshot::Selected(text.to_owned()))
+            .unwrap_or(SourceSnapshot::Empty),
+        Some("empty") => SourceSnapshot::Empty,
+        Some("unsupported") => SourceSnapshot::Unsupported,
+        Some("password") => SourceSnapshot::Password,
+        _ => SourceSnapshot::ContextLost,
+    }
+}
+
+fn translate_with_host(
+    host: &mut dyn HostBridge,
+    request: &InvokeRequest,
+    text: &str,
+) -> Result<InvokeResult, RpcError> {
+    let settings_value = host
+        .request("settings.read", "settings.read", json!({}))
+        .unwrap_or_else(|_| json!({}));
+    let settings = ProviderSettings::from_value(&settings_value)
+        .unwrap_or_else(|_| ProviderSettings::defaults());
+    let hub = ProviderHub::from_settings(&settings, |reference| {
+        let profile = if reference.contains("yandex") {
+            "yandex"
+        } else {
+            "google"
+        };
+        host.request(
+            "secret.read",
+            "secret.read",
+            json!({"profile": profile, "name": reference}),
+        )
+        .ok()
+        .and_then(|value| {
+            value
+                .get("value")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+    })
+    .map_err(|error| RpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))?;
+    if hub.missing_key_profile().is_some() {
+        return Ok(InvokeResult::ok(
+            "Для выбранного сервиса не задан API-ключ. Откройте настройки переводчика.",
+        )
+        .with_data(json!({
+            "callId": request.call_id,
+            "outcome": "missing-key",
+            "httpRequests": 0,
+        })));
+    }
+    let transport = ReqwestTransport::new()
+        .map_err(|error| RpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))?;
+    match hub.translate(text, &transport, &AtomicBool::new(false)) {
+        Ok(translation) => Ok(InvokeResult::ok(translation.text.clone()).with_data(json!({
+            "callId": request.call_id,
+            "outcome": "translated",
+            "provider": translation.provider.name(),
+            "text": translation.text,
+            "httpRequests": 1,
+        }))),
+        Err(error) => Err(RpcError::new(
+            error_codes::INTERNAL_ERROR,
+            error.to_string(),
+        )),
     }
 }
 

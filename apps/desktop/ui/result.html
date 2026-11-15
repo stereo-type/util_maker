@@ -41,6 +41,7 @@
       <div class="message" id="message">Ожидание результата…</div>
       <div class="meta" id="meta"></div>
       <div class="actions">
+        <button id="copy" type="button" hidden>Копировать</button>
         <button id="disable" type="button" hidden>Отключить плагин</button>
         <button id="close" type="button">Закрыть (Esc)</button>
       </div>
@@ -62,6 +63,15 @@
           document.getElementById("meta").textContent =
             `${result.actionName} · источник: ${result.source} · ядро: ${result.coreElapsedMs} мс · ` +
             `от события до окна: ${result.sinceEventMs} мс`;
+          const copy = document.getElementById("copy");
+          copy.hidden = result.status !== "ok";
+          copy.onclick = async () => {
+            try {
+              await invoke("copy_text", { text: result.message });
+            } catch (error) {
+              document.getElementById("message").textContent = `Не удалось скопировать: ${error}`;
+            }
+          };
           const disable = document.getElementById("disable");
           disable.hidden = result.status === "ok";
           disable.onclick = async () => {

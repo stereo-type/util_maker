@@ -1,0 +1,46 @@
+{
+  "manifestVersion": 1,
+  "id": "org.utilmaker.screen-ocr",
+  "publisher": "org.utilmaker",
+  "name": "Текст с экрана",
+  "version": "0.4.24",
+  "hostApi": ">=1.0.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "screen-ocr-module.exe",
+    "linux-x64": "screen-ocr-module"
+  },
+  "capabilities": ["screen.capture", "settings.read", "clipboard.write"],
+  "actions": [
+    {
+      "id": "recognize-region",
+      "name": "Распознать текст в области",
+      "description": "Выбрать область на снимке экрана, распознать текст и открыть результат для правки",
+      "recommendedHotkeys": ["Ctrl+Shift+O"]
+    }
+  ],
+  "settings": {
+    "schemaVersion": 1,
+    "fields": [
+      {
+        "id": "languages",
+        "label": "Языки распознавания",
+        "type": "select",
+        "default": "rus+eng",
+        "options": [
+          {
+            "value": "rus+eng",
+            "label": "Русский и английский"
+          },
+          {
+            "value": "rus",
+            "label": "Русский"
+          },
+          {
+            "value": "eng",
+            "label": "Английский"
+          }
+        ]
+      }
+    ]
+  }
+}

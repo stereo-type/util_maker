@@ -876,8 +876,8 @@ mod tests {
             origin: FrameOrigin { x: 0, y: 0 },
             scale_factor: 1.0,
             expires_in_ms: 5_000,
-            geometry: Some(geometry(&[(0, 0, 1, 1)])),
             pixel_path: None,
+            geometry: Some(geometry(&[(0, 0, 1, 1)])),
         }
     }
 

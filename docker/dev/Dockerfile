@@ -5,7 +5,7 @@ FROM rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl file git make pkg-config ripgrep \
         libayatana-appindicator3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev \
-        python3 python3-pil fonts-dejavu-core \
+        python3 python3-pil python3-segno fonts-dejavu-core \
         tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup component add clippy rustfmt

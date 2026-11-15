@@ -1,0 +1,174 @@
+{
+  "format": "bgra8",
+  "origin": {
+    "x": -120,
+    "y": -80
+  },
+  "stridePadding": 20,
+  "cases": [
+    {
+      "image": "url.pgm",
+      "width": 315,
+      "height": 315,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 315,
+        "height": 315
+      },
+      "kind": "text",
+      "text": "https://example.com/search?q=%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82&lang=ru#top",
+      "name": "url-eci-utf8"
+    },
+    {
+      "image": "unicode.pgm",
+      "width": 287,
+      "height": 287,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 287,
+        "height": 287
+      },
+      "kind": "text",
+      "text": "  Привет, мир! 👋\nСтрока 2\t— конец  ",
+      "name": "unicode-eci-utf8"
+    },
+    {
+      "image": "rotated.pgm",
+      "width": 315,
+      "height": 315,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 315,
+        "height": 315
+      },
+      "kind": "text",
+      "text": "https://example.com/search?q=%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82&lang=ru#top",
+      "name": "rotated-90"
+    },
+    {
+      "image": "ascii.pgm",
+      "width": 259,
+      "height": 259,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 259,
+        "height": 259
+      },
+      "kind": "text",
+      "text": "WIFI:T:WPA;S:Office;P:secret;;",
+      "name": "ascii-no-eci"
+    },
+    {
+      "image": "command.pgm",
+      "width": 259,
+      "height": 259,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 259,
+        "height": 259
+      },
+      "kind": "text",
+      "text": "rm -rf /tmp/example && echo '<b>ok</b>'",
+      "name": "command-markup"
+    },
+    {
+      "image": "unsupported.pgm",
+      "width": 203,
+      "height": 203,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 203,
+        "height": 203
+      },
+      "name": "unsupported-encoding",
+      "kind": "unsupported-encoding"
+    },
+    {
+      "image": "binary.pgm",
+      "width": 203,
+      "height": 203,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 203,
+        "height": 203
+      },
+      "name": "binary-payload",
+      "kind": "binary"
+    },
+    {
+      "image": "damaged.pgm",
+      "width": 315,
+      "height": 315,
+      "selection": {
+        "x": 0,
+        "y": 0,
+        "width": 315,
+        "height": 315
+      },
+      "name": "damaged",
+      "kind": "damaged"
+    },
+    {
+      "name": "scene-inside-only",
+      "image": "scene.pgm",
+      "width": 1000,
+      "height": 520,
+      "selection": {
+        "x": 20,
+        "y": 20,
+        "width": 262,
+        "height": 262
+      },
+      "kind": "text",
+      "text": "https://inside.example/выбор"
+    },
+    {
+      "name": "scene-outside-only",
+      "image": "scene.pgm",
+      "width": 1000,
+      "height": 520,
+      "selection": {
+        "x": 540,
+        "y": 20,
+        "width": 262,
+        "height": 262
+      },
+      "kind": "text",
+      "text": "https://outside.example/не-выбор"
+    },
+    {
+      "name": "scene-two-codes",
+      "image": "scene.pgm",
+      "width": 1000,
+      "height": 520,
+      "selection": {
+        "x": 20,
+        "y": 20,
+        "width": 900,
+        "height": 420
+      },
+      "kind": "multiple",
+      "count": 2
+    },
+    {
+      "name": "scene-no-code",
+      "image": "scene.pgm",
+      "width": 1000,
+      "height": 520,
+      "selection": {
+        "x": 30,
+        "y": 440,
+        "width": 300,
+        "height": 60
+      },
+      "kind": "no-code"
+    }
+  ]
+}

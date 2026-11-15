@@ -7,6 +7,13 @@
 
 use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
 
+mod decode;
+
+pub use decode::{
+    decode_qr, DecodeOutcome, FrameError, GrayImage, ImageError, QrFrame, QrText, Selection,
+    BYTES_PER_PIXEL,
+};
+
 /// Минимальное белое поле вокруг кода в модулях.
 pub const QUIET_ZONE_MODULES: u32 = 4;
 

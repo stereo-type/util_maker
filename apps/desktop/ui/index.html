@@ -53,6 +53,33 @@
         padding: 18px 20px;
         margin-bottom: 16px;
       }
+      .card.collapsible { padding: 0; }
+      .settings-section { display: block; }
+      .section-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        min-height: 48px;
+        padding: 18px 20px;
+        cursor: pointer;
+        list-style: none;
+        border-radius: 12px;
+      }
+      .section-toggle::-webkit-details-marker { display: none; }
+      .section-toggle:hover {
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+      }
+      .section-toggle h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
+      .section-chevron { width: 20px; height: 20px; flex: none; transition: transform 160ms ease; }
+      .settings-section[open] > .section-toggle { padding-bottom: 0; border-radius: 12px 12px 0 0; }
+      .settings-section[open] > .section-toggle .section-chevron { transform: rotate(90deg); }
+      .section-body { padding: 12px 20px 18px; }
+      @media (prefers-reduced-motion: reduce) {
+        .section-chevron { transition: none; }
+      }
       h2 { font-size: 18px; margin: 0 0 12px; }
       h3 { font-size: 16px; margin: 0 0 4px; }
       .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
@@ -110,6 +137,7 @@
       button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
       button:disabled { opacity: 0.55; cursor: not-allowed; }
       button:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+      .section-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
       .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
       .result {
         margin-top: 14px;
@@ -171,67 +199,104 @@
         <p>Трей и глобальное сочетание вызывают действие установленного микроприложения.</p>
       </header>
 
-      <section class="card" aria-labelledby="plugins-title">
-        <h2 id="plugins-title">Микроприложения</h2>
-        <div id="plugin-list" role="list">Загрузка…</div>
-        <div id="plugin-detail" class="modal-backdrop" hidden>
-          <section class="modal plugin-modal" role="dialog" aria-modal="true" aria-labelledby="plugin-title">
-            <div class="modal-head">
-              <h2 id="plugin-title"></h2>
-              <button id="plugin-close" type="button">Закрыть</button>
+      <section class="card collapsible" aria-labelledby="plugins-title">
+        <details class="settings-section" open>
+          <summary class="section-toggle">
+            <h2 id="plugins-title">Микроприложения</h2>
+            <svg class="section-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M7 4l6 6-6 6" />
+            </svg>
+          </summary>
+          <div class="section-body">
+            <div id="plugin-list" role="list">Загрузка…</div>
+            <div id="plugin-detail" class="modal-backdrop" hidden>
+              <section class="modal plugin-modal" role="dialog" aria-modal="true" aria-labelledby="plugin-title">
+                <div class="modal-head">
+                  <h2 id="plugin-title"></h2>
+                  <button id="plugin-close" type="button">Закрыть</button>
+                </div>
+                <p class="hint" id="plugin-meta"></p>
+                <h3>Действия</h3>
+                <input id="shortcut-search" class="hotkey-input" type="search" placeholder="Поиск по действию или сочетанию" aria-label="Поиск действий" />
+                <div id="plugin-actions"></div>
+                <div id="plugin-settings"></div>
+                <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
+              </section>
             </div>
-            <p class="hint" id="plugin-meta"></p>
-            <h3>Действия</h3>
-            <input id="shortcut-search" class="hotkey-input" type="search" placeholder="Поиск по действию или сочетанию" aria-label="Поиск действий" />
-            <div id="plugin-actions"></div>
-            <div id="plugin-settings"></div>
-            <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
-          </section>
-        </div>
+          </div>
+        </details>
       </section>
 
-      <section class="card" aria-labelledby="package-title">
-        <h2 id="package-title">Установка пакета</h2>
-        <p class="hint">Перетащите .umpkg в это окно или укажите путь, издателя и открытый ключ Ed25519 (64 hex-символа).</p>
-        <label class="check" style="display: block; margin-top: 10px">
-          <span>Файл пакета</span>
-          <input id="package-path" class="hotkey-input" type="text" autocomplete="off" style="margin-top: 6px" placeholder="D:\Util Maker\control.umpkg" />
-        </label>
-        <label class="check" style="display: block; margin-top: 10px">
-          <span>Издатель</span>
-          <input id="package-publisher" class="hotkey-input" type="text" autocomplete="off" style="margin-top: 6px" placeholder="org.utilmaker" />
-        </label>
-        <label class="check" style="display: block; margin-top: 10px">
-          <span>Открытый ключ</span>
-          <input id="package-key" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" style="margin-top: 6px" placeholder="64 hex-символа" />
-        </label>
-        <label class="check" style="display: block; margin-top: 12px">
-          <input type="checkbox" id="package-confirm" />
-          Подтверждаю отпечаток ключа издателя
-        </label>
-        <div class="actions">
-          <button id="preview-package" type="button">Проверить</button>
-          <button id="install-package" class="primary" type="button">Установить</button>
-        </div>
-        <div class="result" id="package-result" role="status" aria-live="polite">Проверка появится здесь.</div>
+      <section class="card collapsible" aria-labelledby="package-title">
+        <details class="settings-section">
+          <summary class="section-toggle">
+            <h2 id="package-title">Установка пакета</h2>
+            <svg class="section-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M7 4l6 6-6 6" />
+            </svg>
+          </summary>
+          <div class="section-body">
+            <p class="hint">Перетащите .umpkg в это окно или укажите путь, издателя и открытый ключ Ed25519 (64 hex-символа).</p>
+            <label class="check" style="display: block; margin-top: 10px">
+              <span>Файл пакета</span>
+              <input id="package-path" class="hotkey-input" type="text" autocomplete="off" style="margin-top: 6px" placeholder="D:\Util Maker\control.umpkg" />
+            </label>
+            <label class="check" style="display: block; margin-top: 10px">
+              <span>Издатель</span>
+              <input id="package-publisher" class="hotkey-input" type="text" autocomplete="off" style="margin-top: 6px" placeholder="org.utilmaker" />
+            </label>
+            <label class="check" style="display: block; margin-top: 10px">
+              <span>Открытый ключ</span>
+              <input id="package-key" class="hotkey-input" type="text" autocomplete="off" spellcheck="false" style="margin-top: 6px" placeholder="64 hex-символа" />
+            </label>
+            <label class="check" style="display: block; margin-top: 12px">
+              <input type="checkbox" id="package-confirm" />
+              Подтверждаю отпечаток ключа издателя
+            </label>
+            <div class="actions">
+              <button id="preview-package" type="button">Проверить</button>
+              <button id="install-package" class="primary" type="button">Установить</button>
+            </div>
+            <div class="result" id="package-result" role="status" aria-live="polite">Проверка появится здесь.</div>
+          </div>
+        </details>
       </section>
 
-      <section class="card" aria-labelledby="startup-title">
-        <h2 id="startup-title">Запуск</h2>
-        <label class="check">
-          <input type="checkbox" id="autostart" disabled />
-          Автозапуск при входе в Windows
-        </label>
-        <p class="hint" id="autostart-status">Проверка настройки…</p>
+      <section class="card collapsible" aria-labelledby="startup-title">
+        <details class="settings-section">
+          <summary class="section-toggle">
+            <h2 id="startup-title">Запуск</h2>
+            <svg class="section-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M7 4l6 6-6 6" />
+            </svg>
+          </summary>
+          <div class="section-body">
+            <label class="check">
+              <input type="checkbox" id="autostart" disabled />
+              Автозапуск при входе в Windows
+            </label>
+            <p class="hint" id="autostart-status">Проверка настройки…</p>
+          </div>
+        </details>
       </section>
 
-      <section class="card">
-        <dl style="margin-top: 0">
-          <dt>Журнал</dt>
-          <dd><code id="log-path">—</code></dd>
-          <dt>Состояние</dt>
-          <dd><code id="config-path">—</code></dd>
-        </dl>
+      <section class="card collapsible" aria-labelledby="diagnostics-title">
+        <details class="settings-section">
+          <summary class="section-toggle">
+            <h2 id="diagnostics-title">Журнал и состояние</h2>
+            <svg class="section-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M7 4l6 6-6 6" />
+            </svg>
+          </summary>
+          <div class="section-body">
+            <dl style="margin-top: 0">
+              <dt>Журнал</dt>
+              <dd><code id="log-path">—</code></dd>
+              <dt>Состояние</dt>
+              <dd><code id="config-path">—</code></dd>
+            </dl>
+          </div>
+        </details>
       </section>
 
       <div class="actions">

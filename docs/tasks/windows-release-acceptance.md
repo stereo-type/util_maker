@@ -1,10 +1,11 @@
 # Принять первую поставку по 11 сценариям Windows
 
-**Статус** — 📥 К выполнению
+**Статус** — 🛠️ В работе
 
 [Этап 4 плана развития](../roadmap.md#4-принять-первую-поставку-windows) · [ТЗ проекта](../specification.md)
 
-Вести отдельный протокол первой поставки по разделам 8–10 общего ТЗ. Протокол ревью прототипа сохраняется как история. Привязать результаты к одной проверяемой ревизии и версиям обоих пакетов.
+Вести отдельный протокол первой поставки по разделам 8–10 общего ТЗ.
+Текущий протокол — [windows-release-protocol.md](windows-release-protocol.md). Протокол ревью прототипа сохраняется как история. Привязать результаты к одной проверяемой ревизии и версиям обоих пакетов.
 
 **Зависимости для старта** — [Включить два штатных пакета в установщик Windows](windows-distribution.md), [Пройти основные настройки с клавиатуры при разных масштабах](blocks/desktop/accessible-settings.md), [Восстанавливать трей и регистрации после смены состояния сессии](blocks/desktop/restore-session.md), [Передать пример подключения стороннего плагина с двумя действиями](blocks/sdk/external-plugin-guide.md), [Измерять холодный отклик каждого плагина до первого кадра](blocks/core/action-metrics.md), [Связать активный профиль с реальными запросами перевода](blocks/plugins/translator/providers/active-profile.md), [Получать кадр и геометрию рабочего стола до показа overlay](blocks/platform/windows/capture-frame.md), [Читать выделение исходного окна через UI Automation](blocks/platform/windows/selection-source.md), [Записывать изображение и текст в буфер обмена Windows](blocks/platform/windows/clipboard-write.md), [Хранить секреты профилей в системном хранилище Windows](blocks/platform/windows/profile-secrets.md), [Исполнять запросы возможностей только в контексте активного вызова](blocks/core/capability-dispatch.md), [Выбирать область и редактировать снимок поверх рабочего стола](blocks/plugins/screenshot/region-editor.md), [Связать выделение и окно результата с действием перевода](blocks/plugins/translator/translate-selection.md).
 

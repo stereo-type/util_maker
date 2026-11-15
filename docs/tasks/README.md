@@ -24,8 +24,8 @@
 
 | Задача | Статус |
 | --- | --- |
-| [Включить два штатных пакета в установщик Windows](windows-distribution.md) | 👁️ На ревью |
-| [Принять первую поставку по 11 сценариям Windows](windows-release-acceptance.md) | 📥 К выполнению |
+| [Включить два штатных пакета в установщик Windows](windows-distribution.md) | ✅ Выполнена |
+| [Принять первую поставку по 11 сценариям Windows](windows-release-acceptance.md) | 🛠️ В работе |
 
 ## Очереди компонентов
 

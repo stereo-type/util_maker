@@ -5,7 +5,6 @@
 | Раздел | Состояние | Количество |
 | --- | --- | ---: |
 | [Общие задачи](README.md#общие-задачи) | Не сделано | 1 |
-| [Общие задачи](README.md#общие-задачи) | На ревью | 1 |
 | [Переводчик](blocks/plugins/translator/README.md) | Не сделано | 2 |
 | [SDK и протокол](blocks/sdk/README.md) | На ревью | 1 |
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | Не сделано | 1 |

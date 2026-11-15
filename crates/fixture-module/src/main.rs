@@ -79,7 +79,7 @@ fn main() {
                     let api_version = if mode == "incompatible" {
                         "2.0.0"
                     } else {
-                        "1.0.0"
+                        util_maker_sdk::HOST_API_VERSION
                     };
                     write_response(
                         &mut stdout,

@@ -773,7 +773,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use util_maker_sdk::manifest::PackageFile;
-    use util_maker_sdk::Action;
+    use util_maker_sdk::{Action, ExtensionContribution};
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
@@ -813,6 +813,8 @@ mod tests {
                 recommended_hotkeys: Vec::new(),
             }],
             settings: None,
+            extension_points: Vec::new(),
+            provides: Vec::new(),
             files: vec![PackageFile {
                 path: "bin/module".to_owned(),
                 sha256: hex::encode(Sha256::digest(payload)),
@@ -1087,6 +1089,116 @@ mod tests {
         assert!(store.remove(MODULE_ID).unwrap());
         assert!(!store.remove(MODULE_ID).unwrap());
         assert!(store.package(MODULE_ID).unwrap().is_none());
+    }
+
+    fn extension_manifest(parent: &str, version: &str, payload: &[u8]) -> Manifest {
+        Manifest {
+            manifest_version: 1,
+            id: "org.example.parent.yandex".to_owned(),
+            publisher: PUBLISHER.to_owned(),
+            name: "Яндекс".to_owned(),
+            version: version.to_owned(),
+            host_api: ">=1.1.0 <2.0.0".to_owned(),
+            entrypoints: BTreeMap::from([("linux-x64".to_owned(), "bin/module".to_owned())]),
+            icon: None,
+            capabilities: vec!["settings.read".to_owned()],
+            actions: Vec::new(),
+            settings: None,
+            extension_points: Vec::new(),
+            provides: vec![ExtensionContribution {
+                module_id: parent.to_owned(),
+                point_id: "translation-provider".to_owned(),
+                contract: "util-maker.translation.provider".to_owned(),
+                interface_version: ">=1.0.0 <2.0.0".to_owned(),
+                name: "Яндекс".to_owned(),
+                description: None,
+            }],
+            files: vec![PackageFile {
+                path: "bin/module".to_owned(),
+                sha256: hex::encode(Sha256::digest(payload)),
+            }],
+        }
+    }
+
+    #[test]
+    fn installs_extension_only_package_without_parent() {
+        let temp = tempfile::tempdir().expect("каталог");
+        let signer = signer(2);
+        let trust = trust(&[(PUBLISHER, &signer)]);
+        let payload = b"provider bytes";
+        let manifest = extension_manifest("org.example.parent", "0.1.0", payload);
+        let bytes = package(&manifest, payload, &signer);
+
+        let store = PackageStore::open(temp.path()).expect("профиль");
+        let host_api = Version::new(1, 1, 0);
+        let result = store
+            .install_bytes(&bytes, &trust, "linux-x64", &host_api)
+            .expect("установка без родителя");
+        assert_eq!(result.preview.provides.len(), 1);
+        assert_eq!(result.preview.provides[0].module_id, "org.example.parent");
+        assert_eq!(result.preview.provides[0].point_id, "translation-provider");
+        assert!(result.preview.actions.is_empty());
+
+        let reopened = PackageStore::open(temp.path()).expect("повторное открытие");
+        let installed = reopened
+            .package("org.example.parent.yandex")
+            .expect("пакет")
+            .expect("установлен");
+        assert!(installed.manifest.actions.is_empty());
+        assert_eq!(installed.manifest.provides[0].name, "Яндекс");
+        assert_eq!(
+            reopened.installed().expect("список").len(),
+            1,
+            "пакет без действий остаётся в профиле"
+        );
+    }
+
+    #[test]
+    fn extension_update_and_remove_keep_parent() {
+        let temp = tempfile::tempdir().expect("каталог");
+        let signer = signer(3);
+        let trust = trust(&[(PUBLISHER, &signer)]);
+        let host_api = Version::new(1, 1, 0);
+        let store = PackageStore::open(temp.path()).expect("профиль");
+
+        let parent_payload = b"parent";
+        let parent = manifest(PUBLISHER, "0.1.0", parent_payload);
+        store
+            .install_bytes(
+                &package(&parent, parent_payload, &signer),
+                &trust,
+                "linux-x64",
+                &host_api,
+            )
+            .expect("родитель");
+
+        for version in ["0.1.0", "0.2.0"] {
+            let payload = format!("provider {version}").into_bytes();
+            let extension = extension_manifest("org.utilmaker.control", version, &payload);
+            store
+                .install_bytes(
+                    &package(&extension, &payload, &signer),
+                    &trust,
+                    "linux-x64",
+                    &host_api,
+                )
+                .expect("плагин");
+        }
+        assert_eq!(
+            store.package(MODULE_ID).expect("родитель").unwrap().version,
+            "0.1.0",
+            "обновление плагина не меняет родителя"
+        );
+
+        assert!(store.remove("org.example.parent.yandex").unwrap());
+        assert!(store
+            .package("org.example.parent.yandex")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store.package(MODULE_ID).expect("родитель").unwrap().version,
+            "0.1.0"
+        );
     }
 
     #[test]

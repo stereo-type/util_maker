@@ -138,6 +138,8 @@ fn category_for(error: &CoreError) -> FailureCategory {
         CoreError::ActionNotFound(_) => FailureCategory::ActionUnavailable,
         CoreError::ModuleDisabled(_) => FailureCategory::ModuleDisabled,
         CoreError::UnknownModule(_) => FailureCategory::ModuleNotFound,
+        CoreError::ExtensionNotFound(_) => FailureCategory::ActionUnavailable,
+        CoreError::ExtensionIncompatible(_) => FailureCategory::IncompatibleApi,
         CoreError::Cancelled { .. } => FailureCategory::Cancelled,
     }
 }

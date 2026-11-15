@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "plugins/control",
     "crates/fixture-module",
+    "crates/fixture-extension",
     "crates/platform",
     "crates/packages",
     "plugins/screenshot",
@@ -15,6 +16,7 @@ members = [
     "plugins/qr-code",
     "apps/desktop",
     "examples/echo-plugin",
+    "examples/echo-extension",
 ]
 
 [workspace.package]

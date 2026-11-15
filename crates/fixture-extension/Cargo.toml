@@ -1,0 +1,15 @@
+[package]
+name = "util-maker-fixture-extension"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+publish = false
+description = "Тестовый плагин-расширение для интеграционных проверок ядра"
+
+[[bin]]
+name = "fixture-extension"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1.0"
+util-maker-sdk = { path = "../sdk" }

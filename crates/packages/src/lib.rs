@@ -109,6 +109,34 @@ pub struct PackagePreview {
     pub entrypoint: String,
     pub file_count: usize,
     pub total_bytes: u64,
+    /// Точки расширения, которые объявляет родитель.
+    #[serde(default)]
+    pub extension_points: Vec<PreviewExtensionPoint>,
+    /// Вклады плагина-расширения с адресом родителя и точки.
+    #[serde(default)]
+    pub provides: Vec<PreviewContribution>,
+}
+
+/// Точка расширения в предварительном просмотре.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewExtensionPoint {
+    pub id: String,
+    pub name: String,
+    pub contract: String,
+    pub contract_version: String,
+    pub required: bool,
+}
+
+/// Вклад плагина в предварительном просмотре.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewContribution {
+    pub module_id: String,
+    pub point_id: String,
+    pub contract: String,
+    pub interface_version: String,
+    pub name: String,
 }
 
 /// Действие в предварительном просмотре.
@@ -213,6 +241,28 @@ pub fn verify_reader<R: Read + Seek>(
         entrypoint,
         file_count: manifest.files.len(),
         total_bytes,
+        extension_points: manifest
+            .extension_points
+            .iter()
+            .map(|point| PreviewExtensionPoint {
+                id: point.id.clone(),
+                name: point.name.clone(),
+                contract: point.contract.clone(),
+                contract_version: point.contract_version.clone(),
+                required: point.required,
+            })
+            .collect(),
+        provides: manifest
+            .provides
+            .iter()
+            .map(|contribution| PreviewContribution {
+                module_id: contribution.module_id.clone(),
+                point_id: contribution.point_id.clone(),
+                contract: contribution.contract.clone(),
+                interface_version: contribution.interface_version.clone(),
+                name: contribution.name.clone(),
+            })
+            .collect(),
     };
     Ok(VerifiedPackage {
         preview,
@@ -410,6 +460,8 @@ mod tests {
                 recommended_hotkeys: Vec::new(),
             }],
             settings: None,
+            extension_points: Vec::new(),
+            provides: Vec::new(),
             files,
         }
     }

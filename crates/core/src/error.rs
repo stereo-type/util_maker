@@ -26,6 +26,10 @@ pub enum CoreError {
     IncompatibleApi(String),
     #[error("действие {0} не найдено")]
     ActionNotFound(String),
+    #[error("точка расширения {0} не найдена")]
+    ExtensionNotFound(String),
+    #[error("вклад расширения несовместим: {0}")]
+    ExtensionIncompatible(String),
     #[error("плагин {0} отключён")]
     ModuleDisabled(String),
     #[error("плагин {0} не установлен")]
@@ -52,6 +56,8 @@ impl CoreError {
             Self::Module { .. } => "module_error",
             Self::IncompatibleApi(_) => "host_api_incompatible",
             Self::ActionNotFound(_) => "action_not_found",
+            Self::ExtensionNotFound(_) => "extension_not_found",
+            Self::ExtensionIncompatible(_) => "extension_incompatible",
             Self::ModuleDisabled(_) => "module_disabled",
             Self::UnknownModule(_) => "module_not_found",
             Self::Cancelled { .. } => "cancelled",

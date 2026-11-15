@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use util_maker_sdk::{
     error_codes, host_methods, FrameRef, FrameRequest, HostCall, HostCallContext, HostHandler,
-    InvocationSource, RpcError,
+    InvocationSource, RpcError, EXTENSIONS_CALL, EXTENSIONS_READ,
 };
 
 /// Непрозрачная ссылка на внешний источник, зафиксированный адаптером ОС.
@@ -91,6 +91,15 @@ pub trait HostSession {
     fn finish_call(&mut self, call_id: &str);
 }
 
+/// Обслуживание точек расширения. Реализуется оболочкой, потому что для
+/// дочернего вызова нужен собственный контекст возможностей и настроек.
+pub trait ExtensionRouter {
+    /// `extensions.list`: только точки вызвавшего родителя.
+    fn list(&mut self, parent: &CallSession, params: &Value) -> Result<Value, RpcError>;
+    /// `extension.invoke`: только активный совместимый вклад.
+    fn invoke(&mut self, parent: &CallSession, params: &Value) -> Result<Value, RpcError>;
+}
+
 /// Платформенный адаптер. Все методы получают только контекст вызова, а не
 /// дескрипторы Win32 или адреса памяти.
 pub trait PlatformHost {
@@ -150,6 +159,7 @@ struct FrameLease {
 /// Диспетчер возможностей поверх платформенного адаптера.
 pub struct HostDispatcher<H: PlatformHost> {
     platform: H,
+    extensions: Option<Box<dyn ExtensionRouter>>,
     sessions: BTreeMap<String, CallSession>,
     frames: BTreeMap<String, FrameLease>,
 }
@@ -158,9 +168,16 @@ impl<H: PlatformHost> HostDispatcher<H> {
     pub fn new(platform: H) -> Self {
         Self {
             platform,
+            extensions: None,
             sessions: BTreeMap::new(),
             frames: BTreeMap::new(),
         }
+    }
+
+    /// Подключает обслуживание точек расширения к тому же диспетчеру.
+    pub fn with_extensions(mut self, extensions: Box<dyn ExtensionRouter>) -> Self {
+        self.extensions = Some(extensions);
+        self
     }
 
     pub fn platform(&self) -> &H {
@@ -349,6 +366,36 @@ impl<H: PlatformHost> HostHandler for HostDispatcher<H> {
                 self.frames.remove(&buffer_id);
                 self.platform.release_frame(&session, &buffer_id)?;
                 Ok(Value::Null)
+            }
+            host_methods::EXTENSIONS_LIST => {
+                if call.capability != EXTENSIONS_READ {
+                    return Err(RpcError::new(
+                        error_codes::CAPABILITY_DENIED,
+                        "extensions.list требует возможность extensions.read",
+                    ));
+                }
+                let router = self.extensions.as_mut().ok_or_else(|| {
+                    RpcError::new(
+                        error_codes::CAPABILITY_DENIED,
+                        "точки расширения недоступны",
+                    )
+                })?;
+                router.list(&session, &call.params)
+            }
+            host_methods::EXTENSION_INVOKE => {
+                if call.capability != EXTENSIONS_CALL {
+                    return Err(RpcError::new(
+                        error_codes::CAPABILITY_DENIED,
+                        "extension.invoke требует возможность extensions.call",
+                    ));
+                }
+                let router = self.extensions.as_mut().ok_or_else(|| {
+                    RpcError::new(
+                        error_codes::CAPABILITY_DENIED,
+                        "вызов расширений недоступен",
+                    )
+                })?;
+                router.invoke(&session, &call.params)
             }
             host_methods::SELECTION_GET => {
                 self.require_source(&session)?;

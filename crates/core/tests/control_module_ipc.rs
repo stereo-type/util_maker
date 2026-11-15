@@ -39,7 +39,7 @@ fn control_handler_is_invoked_over_ipc() {
         .initialize(MODULE_ID)
         .expect("рукопожатие по протоколу v1");
     assert_eq!(initialized.module_id, MODULE_ID);
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
 
     let result = process
         .invoke(
@@ -124,7 +124,7 @@ fn registry_routes_action_from_manifest_without_starting_module() {
 
 #[test]
 fn host_api_version_is_advertised() {
-    assert_eq!(HOST_API_VERSION, "1.0.0");
+    assert_eq!(HOST_API_VERSION, "1.1.0");
 }
 
 #[test]

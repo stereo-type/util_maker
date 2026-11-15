@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::manifest::SecretPresence;
 
 /// Версия API хоста, которую реализует первая поставка.
-pub const HOST_API_VERSION: &str = "1.0.0";
+pub const HOST_API_VERSION: &str = "1.1.0";
 /// Предел одного сообщения в любую сторону.
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// Модуль обязан подтвердить готовность за это время.
@@ -37,6 +37,10 @@ pub mod error_codes {
     pub const CONTEXT_LOST: i64 = 1005;
     pub const FIELD_INVALID: i64 = 1006;
     pub const BUFFER_EXPIRED: i64 = 1007;
+    pub const EXTENSION_NOT_FOUND: i64 = 1008;
+    pub const EXTENSION_INCOMPATIBLE: i64 = 1009;
+    pub const EXTENSION_NOT_SELECTED: i64 = 1010;
+    pub const EXTENSION_FAILED: i64 = 1011;
 }
 
 /// Запрос от хоста к модулю или от модуля к хосту.
@@ -267,6 +271,60 @@ impl InvokeResult {
     }
 }
 
+/// Параметры `extensions.list` в обращении родителя к хосту.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionListParams {
+    pub point_id: String,
+}
+
+/// Доступный вклад в ответе `extensions.list`. Процессы плагинов не
+/// запускаются: хост сообщает только сведения из манифестов.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionContributionInfo {
+    pub module_id: String,
+    pub name: String,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Состояние точки расширения для родителя.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionListResult {
+    pub point_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub contributions: Vec<ExtensionContributionInfo>,
+}
+
+/// Запрос `extension.invoke`: операция контракта и её параметры передаются
+/// дочернему процессу без истолкования ядром.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionInvokeRequest {
+    pub call_id: String,
+    pub point_id: String,
+    pub operation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u32>,
+    #[serde(default)]
+    pub params: Value,
+}
+
+/// Результат операции контракта. Схему `data` определяет контракт точки.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionInvokeResult {
+    #[serde(default)]
+    pub data: Value,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +358,26 @@ mod tests {
         );
         assert_eq!(InvokeResult::ok("готово").message_or_default(), "готово");
     }
+    #[test]
+    fn extension_invoke_round_trip() {
+        let request = ExtensionInvokeRequest {
+            call_id: "call-7".to_owned(),
+            point_id: "translation-provider".to_owned(),
+            operation: "translate".to_owned(),
+            timeout_ms: Some(10_000),
+            params: json!({"text": "hello"}),
+        };
+        let line = serde_json::to_string(&request).unwrap();
+        assert!(line.contains("\"timeoutMs\":10000"));
+        let parsed: ExtensionInvokeRequest = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed, request);
+
+        let minimal: ExtensionInvokeRequest =
+            serde_json::from_str(r#"{"callId":"call-1","pointId":"p","operation":"op"}"#).unwrap();
+        assert!(minimal.timeout_ms.is_none());
+        assert!(minimal.params.is_null());
+    }
+
     #[test]
     fn form_command_round_trip() {
         let request = FormCommandRequest {

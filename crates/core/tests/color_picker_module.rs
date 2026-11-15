@@ -138,7 +138,7 @@ fn process_reports_missing_host_and_unknown_action() {
         .initialize_with_capabilities(MODULE_ID, &manifest.capabilities)
         .expect("рукопожатие");
     assert_eq!(initialized.module_id, MODULE_ID);
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
     assert_eq!(initialized.capabilities, manifest.capabilities);
 
     let error = process

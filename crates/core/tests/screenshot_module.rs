@@ -67,7 +67,7 @@ fn process_reports_missing_frame_and_unknown_action() {
     let mut process = ModuleProcess::spawn(&executable).expect("запуск плагина");
     let initialized = process.initialize(MODULE_ID).expect("рукопожатие");
     assert_eq!(initialized.module_id, MODULE_ID);
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
 
     let error = process
         .invoke(

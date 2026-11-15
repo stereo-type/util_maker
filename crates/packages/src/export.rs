@@ -410,6 +410,8 @@ mod tests {
                 recommended_hotkeys: Vec::new(),
             }],
             settings: None,
+            extension_points: Vec::new(),
+            provides: Vec::new(),
             files: Vec::new(),
         }
     }

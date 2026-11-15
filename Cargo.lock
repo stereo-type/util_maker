@@ -4567,10 +4567,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "util-maker-example-echo-extension"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "util-maker-sdk",
+]
+
+[[package]]
+name = "util-maker-fixture-extension"
+version = "0.4.30"
+dependencies = [
+ "serde_json",
+ "util-maker-sdk",
+]
+
+[[package]]
 name = "util-maker-fixture-module"
 version = "0.4.30"
 dependencies = [
  "serde_json",
+ "util-maker-sdk",
 ]
 
 [[package]]

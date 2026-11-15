@@ -15,10 +15,11 @@ use std::time::{Duration, Instant};
 use semver::Version;
 use serde_json::{json, Value};
 use util_maker_sdk::{
-    error_codes, CallContext, DeniedHost, FormCommandRequest, FormCommandResult, HostCall,
-    HostCallContext, HostHandler, InitializeParams, InitializeResult, InvocationSource,
-    InvokeRequest, InvokeResult, RpcError, RpcResponse, HOST_API_VERSION, HOST_CALL_METHOD,
-    INITIALIZE_TIMEOUT, JSONRPC_VERSION, MAX_MESSAGE_BYTES, SHUTDOWN_TIMEOUT,
+    error_codes, CallContext, DeniedHost, ExtensionInvokeRequest, ExtensionInvokeResult,
+    FormCommandRequest, FormCommandResult, HostCall, HostCallContext, HostHandler,
+    InitializeParams, InitializeResult, InvocationSource, InvokeRequest, InvokeResult, RpcError,
+    RpcResponse, HOST_API_VERSION, HOST_CALL_METHOD, INITIALIZE_TIMEOUT, JSONRPC_VERSION,
+    MAX_MESSAGE_BYTES, SHUTDOWN_TIMEOUT,
 };
 
 use crate::diagnostics::sanitize;
@@ -375,6 +376,60 @@ impl ModuleProcess {
         };
         serde_json::from_value(result)
             .map_err(|error| CoreError::Protocol(format!("ответ invoke: {error}")))
+    }
+
+    /// Вызов операции контракта расширения. Ответ содержит только `data`:
+    /// схему определяет контракт точки, ядро её не истолковывает.
+    #[allow(clippy::too_many_arguments)]
+    pub fn extension_invoke_with_host(
+        &mut self,
+        call_id: &str,
+        point_id: &str,
+        operation: &str,
+        action_params: Value,
+        timeout: Duration,
+        cancel: &AtomicBool,
+        host: &mut dyn HostHandler,
+        capabilities: &[String],
+    ) -> Result<ExtensionInvokeResult, CoreError> {
+        let request = ExtensionInvokeRequest {
+            call_id: call_id.to_owned(),
+            point_id: point_id.to_owned(),
+            operation: operation.to_owned(),
+            timeout_ms: None,
+            params: action_params,
+        };
+        let id = self.next_id();
+        self.send_value(&json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": "extension.invoke",
+            "params": serde_json::to_value(request)?,
+        }))?;
+        let context = HostCallContext::new(
+            self.module_id.clone().unwrap_or_default(),
+            call_id,
+            capabilities.to_vec(),
+        );
+        let result = match self.wait_result(
+            id,
+            "extension.invoke",
+            timeout,
+            Some(cancel),
+            host,
+            &context,
+        ) {
+            Ok(result) => result,
+            Err(CoreError::Cancelled { .. }) => {
+                self.cancel_and_stop(call_id);
+                return Err(CoreError::Cancelled {
+                    call_id: call_id.to_owned(),
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        serde_json::from_value(result)
+            .map_err(|error| CoreError::Protocol(format!("ответ extension.invoke: {error}")))
     }
 
     /// Просит модуль отменить активный вызов.

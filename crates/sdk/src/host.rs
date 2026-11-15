@@ -22,6 +22,8 @@ pub mod host_methods {
     pub const BUFFER_COPY: &str = "buffer.copy";
     pub const SETTINGS_READ: &str = "settings.read";
     pub const SECRET_READ: &str = "secret.read";
+    pub const EXTENSIONS_LIST: &str = "extensions.list";
+    pub const EXTENSION_INVOKE: &str = "extension.invoke";
 }
 
 /// Формат пикселей кадра. Первая версия принимает BGRA8.

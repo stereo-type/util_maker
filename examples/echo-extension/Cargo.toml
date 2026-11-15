@@ -1,0 +1,15 @@
+[package]
+name = "util-maker-example-echo-extension"
+version = "0.1.0"
+edition = "2021"
+license = "proprietary"
+publish = false
+description = "Пример плагина-расширения без собственных действий"
+
+[[bin]]
+name = "echo-extension"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1.0"
+util-maker-sdk = { path = "../../crates/sdk" }

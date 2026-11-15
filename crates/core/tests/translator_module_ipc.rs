@@ -75,7 +75,7 @@ fn initialize_confirms_translator_identity() {
         .initialize(MODULE_ID)
         .expect("рукопожатие по протоколу v1");
     assert_eq!(initialized.module_id, MODULE_ID);
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
     process.shutdown();
 }
 

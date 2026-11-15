@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "id": "org.example.echo-extension",
+  "publisher": "org.example",
+  "name": "Эхо-расширение",
+  "version": "0.1.0",
+  "hostApi": ">=1.1.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "echo-extension.exe",
+    "linux-x64": "echo-extension"
+  },
+  "capabilities": [],
+  "actions": [],
+  "provides": [
+    {
+      "moduleId": "org.example.echo",
+      "pointId": "echo",
+      "contract": "util-maker.echo",
+      "interfaceVersion": ">=1.0.0 <2.0.0",
+      "name": "Эхо",
+      "description": "Возвращает переданный текст без изменений"
+    }
+  ]
+}

@@ -120,6 +120,52 @@ pub struct SecretPresence {
     pub present: bool,
 }
 
+/// Возможности хоста, которые запрашивает родитель с точками расширения.
+pub const EXTENSIONS_READ: &str = "extensions.read";
+pub const EXTENSIONS_CALL: &str = "extensions.call";
+/// Минимальная версия API хоста, поддерживающая плагины-расширения.
+pub const EXTENSIONS_HOST_API: &str = "1.1.0";
+
+/// Правило выбора плагина для точки расширения. В первой версии допустим
+/// только `single`; `multiple` зарезервирован и отклоняется проверкой.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtensionSelection {
+    Single,
+    Multiple,
+}
+
+fn default_extension_selection() -> ExtensionSelection {
+    ExtensionSelection::Single
+}
+
+/// Точка расширения, объявленная родителем в манифесте.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionPoint {
+    pub id: String,
+    pub name: String,
+    pub contract: String,
+    pub contract_version: String,
+    #[serde(default = "default_extension_selection")]
+    pub selection: ExtensionSelection,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// Вклад плагина-расширения в точку расширения родителя.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionContribution {
+    pub module_id: String,
+    pub point_id: String,
+    pub contract: String,
+    pub interface_version: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 /// Описание микроприложения из `.umpkg`/каталога установки.
 ///
 /// Поля объявлены в camelCase, чтобы файл читался без преобразований.
@@ -144,6 +190,12 @@ pub struct Manifest {
     pub settings: Option<SettingsSchema>,
     #[serde(default)]
     pub files: Vec<PackageFile>,
+    /// Точки расширения родителя. Необязательное поле схемы.
+    #[serde(default)]
+    pub extension_points: Vec<ExtensionPoint>,
+    /// Вклады плагина-расширения. Необязательное поле схемы.
+    #[serde(default)]
+    pub provides: Vec<ExtensionContribution>,
 }
 
 /// Действие, которое модуль объявляет в манифесте.
@@ -255,8 +307,34 @@ impl Manifest {
                 )));
             }
         }
-        if self.actions.is_empty() {
-            return Err(invalid("в манифесте нет ни одного действия"));
+        if self.actions.is_empty() && self.provides.is_empty() {
+            return Err(invalid(
+                "в манифесте нет ни одного действия или вклада расширения",
+            ));
+        }
+        if !self.extension_points.is_empty() && !self.provides.is_empty() {
+            return Err(invalid(
+                "пакет не может одновременно объявлять extensionPoints и provides",
+            ));
+        }
+        if !self.provides.is_empty()
+            && self
+                .capabilities
+                .iter()
+                .any(|capability| capability.starts_with("extensions."))
+        {
+            return Err(invalid(
+                "плагин-расширение не может запрашивать возможности extensions.*",
+            ));
+        }
+        if !self.extension_points.is_empty() {
+            for capability in [EXTENSIONS_READ, EXTENSIONS_CALL] {
+                if !self.capabilities.iter().any(|item| item == capability) {
+                    return Err(invalid(format!(
+                        "родитель с точками расширения обязан объявить возможность {capability}"
+                    )));
+                }
+            }
         }
         let mut actions = BTreeSet::new();
         for action in &self.actions {
@@ -269,6 +347,11 @@ impl Manifest {
             if !actions.insert(action.id.as_str()) {
                 return Err(invalid(format!("действие {} объявлено дважды", action.id)));
             }
+        }
+        validate_extension_points(&self.extension_points)?;
+        validate_extension_contributions(&self.provides)?;
+        if !self.extension_points.is_empty() || !self.provides.is_empty() {
+            validate_extension_host_api(&self.host_api)?;
         }
         if let Some(settings) = &self.settings {
             settings.validate()?;
@@ -295,6 +378,11 @@ impl Manifest {
     /// Действие по стабильному ID.
     pub fn action(&self, id: &str) -> Option<&Action> {
         self.actions.iter().find(|action| action.id == id)
+    }
+
+    /// Точка расширения по локальному ID.
+    pub fn extension_point(&self, id: &str) -> Option<&ExtensionPoint> {
+        self.extension_points.iter().find(|point| point.id == id)
     }
 
     /// Проверенный относительный путь точки входа для платформы.
@@ -523,6 +611,146 @@ impl SettingsSchema {
         }
         Ok(state)
     }
+}
+
+/// Точки расширения: уникальные локальные ID, точная semver-версия контракта
+/// и единственный поддерживаемый режим выбора.
+fn validate_extension_points(points: &[ExtensionPoint]) -> Result<(), ManifestError> {
+    let mut ids = BTreeSet::new();
+    for point in points {
+        if !is_extension_identifier(&point.id) {
+            return Err(invalid(format!(
+                "недопустимый ID точки расширения: {}",
+                point.id
+            )));
+        }
+        if !ids.insert(point.id.as_str()) {
+            return Err(invalid(format!(
+                "точка расширения {} объявлена дважды",
+                point.id
+            )));
+        }
+        if point.name.trim().is_empty() || point.name.chars().count() > 128 {
+            return Err(invalid(format!(
+                "точка расширения {} без корректного названия",
+                point.id
+            )));
+        }
+        if !is_contract_id(&point.contract) {
+            return Err(invalid(format!(
+                "недопустимый контракт точки {}: {}",
+                point.id, point.contract
+            )));
+        }
+        Version::parse(&point.contract_version)
+            .map_err(|error| invalid(format!("версия контракта точки {}: {error}", point.id)))?;
+        if point.selection != ExtensionSelection::Single {
+            return Err(invalid(format!(
+                "точка {}: selection multiple пока не поддерживается",
+                point.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Вклады плагина: адрес точки, совместимый диапазон контракта и один вклад
+/// на пару `moduleId + pointId`.
+fn validate_extension_contributions(
+    contributions: &[ExtensionContribution],
+) -> Result<(), ManifestError> {
+    let mut pairs = BTreeSet::new();
+    for contribution in contributions {
+        if !is_identifier(&contribution.module_id) {
+            return Err(invalid(format!(
+                "недопустимый ID родителя во вкладе: {}",
+                contribution.module_id
+            )));
+        }
+        if !is_extension_identifier(&contribution.point_id) {
+            return Err(invalid(format!(
+                "недопустимый ID точки во вкладе: {}",
+                contribution.point_id
+            )));
+        }
+        if !pairs.insert((
+            contribution.module_id.as_str(),
+            contribution.point_id.as_str(),
+        )) {
+            return Err(invalid(format!(
+                "вклад в {}/{} объявлен дважды",
+                contribution.module_id, contribution.point_id
+            )));
+        }
+        if !is_contract_id(&contribution.contract) {
+            return Err(invalid(format!(
+                "недопустимый контракт вклада: {}",
+                contribution.contract
+            )));
+        }
+        parse_version_req(&contribution.interface_version).map_err(|error| {
+            invalid(format!(
+                "диапазон interfaceVersion {}: {error}",
+                contribution.interface_version
+            ))
+        })?;
+        if contribution.name.trim().is_empty() || contribution.name.chars().count() > 128 {
+            return Err(invalid(format!(
+                "вклад {}/{} без корректного имени",
+                contribution.module_id, contribution.point_id
+            )));
+        }
+        if contribution
+            .description
+            .as_deref()
+            .is_some_and(|description| description.chars().count() > 512)
+        {
+            return Err(invalid(format!(
+                "описание вклада {}/{} длиннее 512 символов",
+                contribution.module_id, contribution.point_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Пакет с расширениями требует API хоста не ниже 1.1.0: старый хост должен
+/// отклонить его до запуска, а не принять пакет, который не сможет вызвать.
+fn validate_extension_host_api(host_api: &str) -> Result<(), ManifestError> {
+    let requirement = parse_version_req(host_api)
+        .map_err(|error| invalid(format!("диапазон hostApi {host_api}: {error}")))?;
+    let supported = Version::parse(EXTENSIONS_HOST_API)
+        .map_err(|error| invalid(format!("версия API расширений: {error}")))?;
+    let legacy =
+        Version::parse("1.0.0").map_err(|error| invalid(format!("версия API 1.0.0: {error}")))?;
+    if !requirement.matches(&supported) || requirement.matches(&legacy) {
+        return Err(invalid(format!(
+            "пакет с расширениями требует hostApi >=1.1.0 <2.0.0, указан {host_api}"
+        )));
+    }
+    Ok(())
+}
+
+/// ID точки и поля формы: строчные латинские буквы, цифры и дефисы.
+fn is_extension_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_lowercase()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+/// Глобальный ID контракта: буквы, цифры, точки, дефисы и подчёркивания.
+fn is_contract_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 fn validate_setting_field(field: &SettingField, region: &str) -> Result<(), ManifestError> {
@@ -915,6 +1143,127 @@ mod tests {
         assert_ne!(text_with_options, SETTINGS);
         let manifest = Manifest::from_json(&control_with_settings(&text_with_options)).unwrap();
         assert!(manifest.validate().is_err());
+    }
+
+    const PARENT: &str = r#"{
+      "manifestVersion": 1,
+      "id": "org.example.translator",
+      "publisher": "org.example",
+      "name": "Переводчик",
+      "version": "1.0.0",
+      "hostApi": ">=1.1.0 <2.0.0",
+      "entrypoints": { "linux-x64": "translator" },
+      "capabilities": ["extensions.read", "extensions.call"],
+      "actions": [{ "id": "translate", "name": "Перевести" }],
+      "extensionPoints": [
+        {
+          "id": "translation-provider",
+          "name": "Провайдер перевода",
+          "contract": "util-maker.translation.provider",
+          "contractVersion": "1.0.0",
+          "selection": "single",
+          "required": true
+        }
+      ]
+    }"#;
+
+    const PROVIDER: &str = r#"{
+      "manifestVersion": 1,
+      "id": "org.example.translator.yandex",
+      "publisher": "org.example",
+      "name": "Яндекс",
+      "version": "1.0.0",
+      "hostApi": ">=1.1.0 <2.0.0",
+      "entrypoints": { "linux-x64": "yandex" },
+      "capabilities": ["secret.read"],
+      "actions": [],
+      "provides": [
+        {
+          "moduleId": "org.example.translator",
+          "pointId": "translation-provider",
+          "contract": "util-maker.translation.provider",
+          "interfaceVersion": ">=1.0.0 <2.0.0",
+          "name": "Яндекс",
+          "description": "Yandex Translate API v2"
+        }
+      ]
+    }"#;
+
+    #[test]
+    fn extension_parent_and_provider_are_valid() {
+        let parent = Manifest::from_json(PARENT).unwrap();
+        parent.validate().expect("родитель");
+        assert_eq!(parent.extension_points.len(), 1);
+        assert_eq!(
+            parent.extension_points[0].contract,
+            "util-maker.translation.provider"
+        );
+
+        let provider = Manifest::from_json(PROVIDER).unwrap();
+        provider.validate().expect("плагин-расширение");
+        assert!(provider.actions.is_empty());
+        assert_eq!(provider.provides.len(), 1);
+        assert_eq!(provider.provides[0].interface_version, ">=1.0.0 <2.0.0");
+    }
+
+    #[test]
+    fn rejects_invalid_extension_contracts() {
+        let multiple = PARENT.replace("\"selection\": \"single\"", "\"selection\": \"multiple\"");
+        assert!(Manifest::from_json(&multiple).unwrap().validate().is_err());
+
+        let missing_capability = PARENT.replace(
+            "\"capabilities\": [\"extensions.read\", \"extensions.call\"],",
+            "\"capabilities\": [\"extensions.read\"],",
+        );
+        assert!(Manifest::from_json(&missing_capability)
+            .unwrap()
+            .validate()
+            .is_err());
+
+        let old_host_api = PARENT.replace("\">=1.1.0 <2.0.0\"", "\">=1.0.0 <2.0.0\"");
+        assert!(Manifest::from_json(&old_host_api)
+            .unwrap()
+            .validate()
+            .is_err());
+
+        let bad_version = PARENT.replace(
+            "\"contractVersion\": \"1.0.0\"",
+            "\"contractVersion\": \"latest\"",
+        );
+        assert!(Manifest::from_json(&bad_version)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_provider_contributions() {
+        let nested = PROVIDER.replace(
+            "\"capabilities\": [\"secret.read\"],",
+            "\"capabilities\": [\"secret.read\", \"extensions.read\"],",
+        );
+        assert!(Manifest::from_json(&nested).unwrap().validate().is_err());
+
+        let duplicate = PROVIDER.replace(
+            "\"name\": \"Яндекс\",\n          \"description\": \"Yandex Translate API v2\"",
+            "\"name\": \"Яндекс\",\n          \"description\": \"Yandex Translate API v2\"\n        },\n        {\n          \"moduleId\": \"org.example.translator\",\n          \"pointId\": \"translation-provider\",\n          \"contract\": \"util-maker.translation.provider\",\n          \"interfaceVersion\": \">=1.0.0 <2.0.0\",\n          \"name\": \"Ещё\"",
+        );
+        assert!(Manifest::from_json(&duplicate).unwrap().validate().is_err());
+
+        let bad_interface = PROVIDER.replace("\">=1.0.0 <2.0.0\"", "\"not-a-version\"");
+        assert!(Manifest::from_json(&bad_interface)
+            .unwrap()
+            .validate()
+            .is_err());
+
+        let empty_provider = PROVIDER.replace(
+            "\"provides\": [",
+            "\"extensionPoints\": [],\n      \"provides\": [",
+        );
+        assert!(Manifest::from_json(&empty_provider)
+            .unwrap()
+            .validate()
+            .is_ok());
     }
 
     #[test]

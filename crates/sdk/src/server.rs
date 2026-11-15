@@ -14,9 +14,9 @@ use serde_json::{json, Value};
 
 use crate::host::{HostBridge, HostCall, HostCallError, HOST_CALL_METHOD};
 use crate::protocol::{
-    error_codes, FormCommandRequest, FormCommandResult, InitializeParams, InitializeResult,
-    InvokeRequest, InvokeResult, RpcError, RpcRequest, RpcResponse, JSONRPC_VERSION,
-    MAX_MESSAGE_BYTES,
+    error_codes, ExtensionInvokeRequest, ExtensionInvokeResult, FormCommandRequest,
+    FormCommandResult, InitializeParams, InitializeResult, InvokeRequest, InvokeResult, RpcError,
+    RpcRequest, RpcResponse, JSONRPC_VERSION, MAX_MESSAGE_BYTES,
 };
 
 /// Постоянные сведения о процессе модуля.
@@ -79,6 +79,27 @@ pub trait Module {
         _host: &mut dyn HostBridge,
     ) -> Result<InvokeResult, RpcError> {
         self.invoke(request)
+    }
+
+    /// Вызов операции контракта точки расширения. Модуль без этого метода
+    /// получает `METHOD_NOT_FOUND`; обычный `invoke` продолжает работать.
+    fn extension_invoke(
+        &mut self,
+        _request: &ExtensionInvokeRequest,
+    ) -> Result<ExtensionInvokeResult, RpcError> {
+        Err(RpcError::new(
+            error_codes::METHOD_NOT_FOUND,
+            "модуль не поддерживает плагины-расширения",
+        ))
+    }
+
+    /// Вариант `extension_invoke` с доступом к возможностям хоста.
+    fn extension_invoke_with_host(
+        &mut self,
+        request: &ExtensionInvokeRequest,
+        _host: &mut dyn HostBridge,
+    ) -> Result<ExtensionInvokeResult, RpcError> {
+        self.extension_invoke(request)
     }
 
     /// Команда формы настроек, например проверка подключения.
@@ -412,6 +433,43 @@ where
                     format!("параметры invoke: {error}"),
                 )),
             },
+            "extension.invoke" => {
+                match serde_json::from_value::<ExtensionInvokeRequest>(request.params) {
+                    Ok(params) => {
+                        let call_id = params.call_id.clone();
+                        let capabilities = module
+                            .info()
+                            .capabilities
+                            .iter()
+                            .map(|value| (*value).to_owned())
+                            .collect();
+                        let result = {
+                            let mut host =
+                                StdioHostBridge::new(output, &incoming, call_id, capabilities);
+                            let result = module
+                                .extension_invoke_with_host(&params, &mut host)
+                                .and_then(|result| {
+                                    serde_json::to_value(result).map_err(|error| {
+                                        RpcError::new(
+                                            error_codes::INTERNAL_ERROR,
+                                            format!("сериализация extension.invoke: {error}"),
+                                        )
+                                    })
+                                });
+                            shutdown_after = host.shutdown_requested;
+                            result
+                        };
+                        if shutdown_after {
+                            module.shutdown();
+                        }
+                        result
+                    }
+                    Err(error) => Err(RpcError::new(
+                        error_codes::INVALID_PARAMS,
+                        format!("параметры extension.invoke: {error}"),
+                    )),
+                }
+            }
             "command" => match serde_json::from_value::<FormCommandRequest>(request.params) {
                 Ok(params) => {
                     let call_id = format!("command:{}", params.command_id);
@@ -523,6 +581,24 @@ mod tests {
             }
         }
 
+        fn extension_invoke(
+            &mut self,
+            request: &ExtensionInvokeRequest,
+        ) -> Result<ExtensionInvokeResult, RpcError> {
+            if request.operation != "translate" {
+                return Err(RpcError::new(
+                    error_codes::METHOD_NOT_FOUND,
+                    "неизвестная операция расширения",
+                ));
+            }
+            Ok(ExtensionInvokeResult {
+                data: json!({
+                    "text": request.params.get("text").cloned().unwrap_or(Value::Null),
+                    "pointId": request.point_id,
+                }),
+            })
+        }
+
         fn command(&mut self, request: &FormCommandRequest) -> Result<FormCommandResult, RpcError> {
             Ok(FormCommandResult {
                 message: Some(format!("команда {} выполнена", request.command_id)),
@@ -587,6 +663,22 @@ mod tests {
         ]);
         assert_eq!(responses[1]["result"]["stopped"], true);
         assert_eq!(responses[2]["error"]["code"], error_codes::CANCELLED);
+    }
+
+    #[test]
+    fn extension_invoke_returns_contract_data() {
+        let responses = run(&[
+            initialize(),
+            r#"{"jsonrpc":"2.0","id":2,"method":"extension.invoke","params":{"callId":"call-10","pointId":"translation-provider","operation":"translate","params":{"text":"hello"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"extension.invoke","params":{"callId":"call-11","pointId":"translation-provider","operation":"unknown"}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#,
+        ]);
+        assert_eq!(responses[1]["result"]["data"]["text"], "hello");
+        assert_eq!(
+            responses[1]["result"]["data"]["pointId"],
+            "translation-provider"
+        );
+        assert_eq!(responses[2]["error"]["code"], error_codes::METHOD_NOT_FOUND);
     }
 
     #[test]

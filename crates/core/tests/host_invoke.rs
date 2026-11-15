@@ -136,6 +136,6 @@ fn late_response_after_timeout_is_ignored() {
     let initialized = process
         .initialize(FIXTURE_ID)
         .expect("рукопожатие после позднего ответа");
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
     process.shutdown();
 }

@@ -11,8 +11,9 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use util_maker_sdk::{
-    error_codes, Action, DeniedHost, HostCallContext, HostHandler, InvocationSource, InvokeStatus,
-    Manifest, HOST_API_VERSION,
+    error_codes, Action, DeniedHost, ExtensionContributionInfo, ExtensionInvokeRequest,
+    ExtensionInvokeResult, ExtensionListResult, ExtensionPoint, HostCallContext, HostHandler,
+    InvocationSource, InvokeStatus, Manifest, RpcError, HOST_API_VERSION,
 };
 
 use crate::capabilities::{CallSession, HostSession, InvocationContext, SessionHost};
@@ -62,6 +63,33 @@ impl ModuleEntry {
     }
 }
 
+/// Состояние одного вклада для интерфейса и родителя.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionContributionStatus {
+    pub module_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
+/// Точка расширения с выбранным и доступными вкладами.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionPointStatus {
+    pub module_id: String,
+    pub point_id: String,
+    pub name: String,
+    pub contract: String,
+    pub contract_version: String,
+    pub required: bool,
+    pub selected: Option<String>,
+    pub needs_selection: bool,
+    pub contributions: Vec<ExtensionContributionStatus>,
+}
+
 /// Действие в меню. Чтение каталога не запускает процессы.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +132,9 @@ pub struct Registry {
     modules: RwLock<BTreeMap<String, ModuleEntry>>,
     active: Mutex<BTreeMap<String, ActiveCall>>,
     disabled: Mutex<BTreeSet<String>>,
+    selections: Mutex<BTreeMap<String, String>>,
     state_path: Option<PathBuf>,
+    selection_path: Option<PathBuf>,
 }
 
 impl Registry {
@@ -116,9 +146,13 @@ impl Registry {
     pub fn with_state_path(path: impl AsRef<Path>) -> Result<Self, CoreError> {
         let path = path.as_ref().to_path_buf();
         let disabled = load_disabled(&path)?;
+        let selection_path = path.with_file_name("extensions.json");
+        let selections = load_selections(&selection_path)?;
         Ok(Self {
             disabled: Mutex::new(disabled),
+            selections: Mutex::new(selections),
             state_path: Some(path),
+            selection_path: Some(selection_path),
             ..Self::default()
         })
     }
@@ -217,6 +251,288 @@ impl Registry {
             .collect()
     }
 
+    /// Точки расширения родителя с активным и доступными вкладами. Процессы
+    /// не запускаются: сведения берутся из манифестов. Отключённый родитель
+    /// не показывает свои точки.
+    pub fn extension_points(&self, module_id: &str) -> Vec<ExtensionPointStatus> {
+        let modules = self.modules.read().expect("реестр модулей");
+        let Some(parent) = modules.get(module_id) else {
+            return Vec::new();
+        };
+        if !parent.enabled {
+            return Vec::new();
+        }
+        parent
+            .manifest
+            .extension_points
+            .iter()
+            .map(|point| self.point_status(&modules, parent, point))
+            .collect()
+    }
+
+    /// Список для родителя: только запрошенная точка и только её вклады.
+    /// Этот ответ уходит в `extensions.list` и не запускает плагины.
+    pub fn extension_list(
+        &self,
+        module_id: &str,
+        point_id: &str,
+    ) -> Result<ExtensionListResult, RpcError> {
+        let modules = self.modules.read().expect("реестр модулей");
+        let parent = modules.get(module_id).ok_or_else(|| {
+            extension_error(
+                error_codes::EXTENSION_NOT_FOUND,
+                format!("родитель {module_id} не установлен"),
+                None,
+            )
+        })?;
+        if !parent.enabled {
+            return Err(extension_error(
+                error_codes::EXTENSION_NOT_FOUND,
+                format!("родитель {module_id} отключён"),
+                None,
+            ));
+        }
+        let point = parent.manifest.extension_point(point_id).ok_or_else(|| {
+            extension_error(
+                error_codes::EXTENSION_NOT_FOUND,
+                format!("точка {point_id} не объявлена модулем {module_id}"),
+                None,
+            )
+        })?;
+        let status = self.point_status(&modules, parent, point);
+        Ok(ExtensionListResult {
+            point_id: status.point_id.clone(),
+            selected: status.selected.clone(),
+            required: status.required,
+            contributions: status
+                .contributions
+                .into_iter()
+                .map(|contribution| ExtensionContributionInfo {
+                    module_id: contribution.module_id,
+                    name: contribution.name,
+                    available: contribution.available,
+                    reason: contribution.reason,
+                })
+                .collect(),
+        })
+    }
+
+    /// Выбирает активный вклад для точки `single`. Сохранённый ID не
+    /// стирается при отключении плагина: выбор снова подействует после
+    /// восстановления.
+    pub fn select_extension(
+        &self,
+        module_id: &str,
+        point_id: &str,
+        plugin_id: &str,
+    ) -> Result<(), CoreError> {
+        let modules = self.modules.read().expect("реестр модулей");
+        let parent = modules
+            .get(module_id)
+            .ok_or_else(|| CoreError::UnknownModule(module_id.to_owned()))?;
+        let point = parent
+            .manifest
+            .extension_point(point_id)
+            .ok_or_else(|| CoreError::ExtensionNotFound(format!("{module_id}/{point_id}")))?;
+        let plugin = modules
+            .get(plugin_id)
+            .ok_or_else(|| CoreError::UnknownModule(plugin_id.to_owned()))?;
+        let contribution = plugin
+            .manifest
+            .provides
+            .iter()
+            .find(|item| item.module_id == module_id && item.point_id == point_id)
+            .ok_or_else(|| {
+                CoreError::ExtensionNotFound(format!("вклад {plugin_id} в {module_id}/{point_id}"))
+            })?;
+        if contribution.contract != point.contract
+            || !interface_matches(&contribution.interface_version, &point.contract_version)
+        {
+            return Err(CoreError::ExtensionIncompatible(format!(
+                "{plugin_id} несовместим с {module_id}/{point_id}"
+            )));
+        }
+        let key = selection_key(module_id, point_id);
+        let mut selections = self.selections.lock().expect("выбор расширений");
+        let previous = selections.insert(key, plugin_id.to_owned());
+        if let Err(error) = self.persist_selections(&selections) {
+            match previous {
+                Some(value) => {
+                    selections.insert(selection_key(module_id, point_id), value);
+                }
+                None => {
+                    selections.remove(&selection_key(module_id, point_id));
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Запускает активный вклад в дочернем процессе со своими возможностями
+    /// и настройками. Родитель не получает путь к чужому исполняемому файлу.
+    pub fn invoke_extension(
+        &self,
+        parent: &CallSession,
+        request: &ExtensionInvokeRequest,
+        logger: Option<Logger>,
+        host: &mut dyn SessionHost,
+    ) -> Result<ExtensionInvokeResult, RpcError> {
+        let parent_entry = self.module(&parent.module_id).ok_or_else(|| {
+            extension_error(
+                error_codes::EXTENSION_NOT_FOUND,
+                format!("родитель {} не установлен", parent.module_id),
+                None,
+            )
+        })?;
+        if !parent_entry.enabled {
+            return Err(extension_error(
+                error_codes::EXTENSION_NOT_FOUND,
+                format!("родитель {} отключён", parent.module_id),
+                None,
+            ));
+        }
+        let point = parent_entry
+            .manifest
+            .extension_point(&request.point_id)
+            .ok_or_else(|| {
+                extension_error(
+                    error_codes::EXTENSION_NOT_FOUND,
+                    format!(
+                        "точка {} не объявлена модулем {}",
+                        request.point_id, parent.module_id
+                    ),
+                    None,
+                )
+            })?
+            .clone();
+
+        let status = {
+            let modules = self.modules.read().expect("реестр модулей");
+            self.point_status(&modules, &parent_entry, &point)
+        };
+        let selected = status.selected.ok_or_else(|| {
+            extension_error(
+                error_codes::EXTENSION_NOT_SELECTED,
+                format!("для точки {} не выбран плагин", request.point_id),
+                None,
+            )
+        })?;
+        let child = self.module(&selected).ok_or_else(|| {
+            extension_error(
+                error_codes::EXTENSION_FAILED,
+                format!("плагин {selected} не установлен"),
+                Some(&selected),
+            )
+        })?;
+        if !child.enabled {
+            return Err(extension_error(
+                error_codes::EXTENSION_FAILED,
+                format!("плагин {selected} отключён"),
+                Some(&selected),
+            ));
+        }
+
+        let timeout_ms = request.timeout_ms.unwrap_or(10_000).min(30_000);
+        let timeout = Duration::from_millis(u64::from(timeout_ms.max(1)));
+        let child_call_id = format!("{}/{}", parent.call_id, selected);
+        let child_session = CallSession::new(
+            child_call_id.clone(),
+            child.manifest.id.clone(),
+            "extension.invoke",
+            parent.context.clone(),
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.active.lock().expect("активные вызовы").insert(
+            child_call_id.clone(),
+            ActiveCall {
+                module_id: child.manifest.id.clone(),
+                cancel: cancel.clone(),
+            },
+        );
+        host.begin_call(&child_session);
+
+        let parent_cancel = self
+            .active
+            .lock()
+            .expect("активные вызовы")
+            .get(&parent.call_id)
+            .map(|call| call.cancel.clone());
+        let stop_watch = Arc::new(AtomicBool::new(false));
+        let watcher = parent_cancel.map(|flag| {
+            let child_flag = cancel.clone();
+            let stop = stop_watch.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    if flag.load(Ordering::SeqCst) {
+                        child_flag.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            })
+        });
+
+        let result = self.run_extension(
+            &child,
+            &child_session,
+            request,
+            timeout,
+            &cancel,
+            logger,
+            host,
+        );
+
+        stop_watch.store(true, Ordering::SeqCst);
+        if let Some(watcher) = watcher {
+            let _ = watcher.join();
+        }
+        host.finish_call(&child_call_id);
+        self.active
+            .lock()
+            .expect("активные вызовы")
+            .remove(&child_call_id);
+
+        result.map_err(|error| map_extension_error(error, &selected))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_extension(
+        &self,
+        child: &ModuleEntry,
+        child_session: &CallSession,
+        request: &ExtensionInvokeRequest,
+        timeout: Duration,
+        cancel: &Arc<AtomicBool>,
+        logger: Option<Logger>,
+        host: &mut dyn HostHandler,
+    ) -> Result<ExtensionInvokeResult, CoreError> {
+        let arguments: Vec<&str> = child.arguments.iter().map(String::as_str).collect();
+        let process_logger = logger.unwrap_or_else(|| Arc::new(|line: &str| eprintln!("{line}")));
+        let mut process =
+            ModuleProcess::spawn_with_args(&child.executable, &arguments, process_logger)?;
+        let initialized = process
+            .initialize_with_capabilities(&child.manifest.id, &child.manifest.capabilities)?;
+        if initialized.module_id != child.manifest.id {
+            process.shutdown();
+            return Err(CoreError::Protocol(format!(
+                "плагин представился как {}, ожидался {}",
+                initialized.module_id, child.manifest.id
+            )));
+        }
+        let result = process.extension_invoke_with_host(
+            &child_session.call_id,
+            &request.point_id,
+            &request.operation,
+            request.params.clone(),
+            timeout,
+            cancel.as_ref(),
+            host,
+            &child.manifest.capabilities,
+        );
+        process.shutdown();
+        result
+    }
     /// Все действия, включая отключённые; нужно странице управления пакетами.
     pub fn all_actions(&self) -> Vec<ActionListing> {
         let modules = self.modules.read().expect("реестр модулей");
@@ -296,6 +612,35 @@ impl Registry {
     /// отсутствии вызовов старого снимка.
     pub fn can_switch(&self, module_id: &str) -> bool {
         self.active_calls(module_id) == 0
+    }
+
+    /// Регистрирует внешний активный вызов, который не запускался через
+    /// [`Registry::invoke`], чтобы его можно было отменить и учесть при
+    /// переключении версии. Возвращает флаг отмены.
+    pub fn track_call(&self, call_id: &str, module_id: &str) -> Arc<AtomicBool> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.active.lock().expect("активные вызовы").insert(
+            call_id.to_owned(),
+            ActiveCall {
+                module_id: module_id.to_owned(),
+                cancel: cancel.clone(),
+            },
+        );
+        cancel
+    }
+
+    /// Снимает регистрацию внешнего активного вызова.
+    pub fn untrack_call(&self, call_id: &str) {
+        self.active.lock().expect("активные вызовы").remove(call_id);
+    }
+
+    /// Просит отменить конкретный вызов по его `callId`. Используется
+    /// оболочкой при отмене родительского вызова расширения.
+    pub fn cancel_call(&self, call_id: &str) {
+        if let Some(call) = self.active.lock().expect("активные вызовы").get(call_id)
+        {
+            call.cancel.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Отменяет все текущие вызовы, например при выходе из приложения.
@@ -570,6 +915,104 @@ impl Registry {
         })
     }
 
+    fn point_status(
+        &self,
+        modules: &BTreeMap<String, ModuleEntry>,
+        parent: &ModuleEntry,
+        point: &ExtensionPoint,
+    ) -> ExtensionPointStatus {
+        let mut contributions = Vec::new();
+        for module in modules.values() {
+            for contribution in &module.manifest.provides {
+                if contribution.module_id != parent.manifest.id || contribution.point_id != point.id
+                {
+                    continue;
+                }
+                let contract_ok = contribution.contract == point.contract;
+                let interface_ok =
+                    interface_matches(&contribution.interface_version, &point.contract_version);
+                let compatible = contract_ok && interface_ok;
+                let available = compatible && module.enabled;
+                let reason = if !contract_ok {
+                    Some("другой контракт".to_owned())
+                } else if !interface_ok {
+                    Some("несовместимая версия контракта".to_owned())
+                } else if !module.enabled {
+                    Some("пакет отключён".to_owned())
+                } else {
+                    None
+                };
+                contributions.push(ExtensionContributionStatus {
+                    module_id: module.manifest.id.clone(),
+                    name: contribution.name.clone(),
+                    description: contribution.description.clone(),
+                    enabled: module.enabled,
+                    available,
+                    reason,
+                });
+            }
+        }
+        contributions.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.module_id.cmp(&right.module_id))
+        });
+        let key = selection_key(&parent.manifest.id, &point.id);
+        let saved = self
+            .selections
+            .lock()
+            .expect("выбор расширений")
+            .get(&key)
+            .cloned();
+        let mut selected = saved.filter(|module_id| {
+            contributions
+                .iter()
+                .any(|item| item.available && &item.module_id == module_id)
+        });
+        if selected.is_none() {
+            let available: Vec<_> = contributions.iter().filter(|item| item.available).collect();
+            if available.len() == 1 {
+                selected = Some(available[0].module_id.clone());
+            }
+        }
+        let needs_selection = selected.is_none();
+        ExtensionPointStatus {
+            module_id: parent.manifest.id.clone(),
+            point_id: point.id.clone(),
+            name: point.name.clone(),
+            contract: point.contract.clone(),
+            contract_version: point.contract_version.clone(),
+            required: point.required,
+            selected,
+            needs_selection,
+            contributions,
+        }
+    }
+
+    fn persist_selections(&self, selections: &BTreeMap<String, String>) -> Result<(), CoreError> {
+        let Some(path) = self.selection_path.as_ref() else {
+            return Ok(());
+        };
+        let document = ExtensionSelectionDocument {
+            selected: selections.clone(),
+        };
+        let contents = serde_json::to_vec_pretty(&document)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let temporary = path.with_extension("json.tmp");
+        fs::write(&temporary, contents)?;
+        if let Err(first) = fs::rename(&temporary, path) {
+            let _ = fs::remove_file(path);
+            fs::rename(&temporary, path).map_err(|_| {
+                CoreError::Io(std::io::Error::other(format!(
+                    "не удалось сохранить выбор расширений: {first}"
+                )))
+            })?;
+        }
+        Ok(())
+    }
+
     fn persist_disabled(&self, disabled: &BTreeSet<String>) -> Result<(), CoreError> {
         let Some(path) = self.state_path.as_ref() else {
             return Ok(());
@@ -612,6 +1055,69 @@ impl HostHandler for PlainSession<'_> {
 impl HostSession for PlainSession<'_> {
     fn begin_call(&mut self, _context: &CallSession) {}
     fn finish_call(&mut self, _call_id: &str) {}
+}
+
+fn selection_key(module_id: &str, point_id: &str) -> String {
+    format!("{module_id}/{point_id}")
+}
+
+fn interface_matches(requirement: &str, version: &str) -> bool {
+    let normalized = requirement
+        .replace(',', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let Ok(requirement) = semver::VersionReq::parse(&normalized) else {
+        return false;
+    };
+    let Ok(version) = Version::parse(version) else {
+        return false;
+    };
+    requirement.matches(&version)
+}
+
+fn extension_error(code: i64, message: impl Into<String>, plugin: Option<&str>) -> RpcError {
+    let error = RpcError::new(code, message);
+    match plugin {
+        Some(plugin) => error.with_data(serde_json::json!({ "pluginId": plugin })),
+        None => error,
+    }
+}
+
+fn map_extension_error(error: CoreError, plugin: &str) -> RpcError {
+    match error {
+        CoreError::Cancelled { .. } => extension_error(
+            error_codes::CANCELLED,
+            format!("вызов плагина {plugin} отменён"),
+            Some(plugin),
+        ),
+        CoreError::Timeout { timeout, .. } => extension_error(
+            error_codes::EXTENSION_FAILED,
+            format!("плагин {plugin} не ответил за {} мс", timeout.as_millis()),
+            Some(plugin),
+        ),
+        other => extension_error(
+            error_codes::EXTENSION_FAILED,
+            format!("плагин {plugin}: {other}"),
+            Some(plugin),
+        ),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ExtensionSelectionDocument {
+    #[serde(default)]
+    selected: BTreeMap<String, String>,
+}
+
+fn load_selections(path: &Path) -> Result<BTreeMap<String, String>, CoreError> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(CoreError::Io(error)),
+    };
+    let document = serde_json::from_str::<ExtensionSelectionDocument>(&contents)?;
+    Ok(document.selected)
 }
 
 fn validate_entry(entry: &ModuleEntry) -> Result<(), CoreError> {

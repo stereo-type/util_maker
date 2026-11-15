@@ -31,7 +31,7 @@ fn compatible_handshake_fits_three_seconds() {
     let initialized = process
         .initialize(FIXTURE_ID)
         .expect("совместимое рукопожатие");
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
     assert_eq!(initialized.module_id, FIXTURE_ID);
     assert!(
         started.elapsed() <= INITIALIZE_TIMEOUT,
@@ -104,7 +104,7 @@ fn late_handshake_times_out_and_next_try_succeeds() {
     let initialized = process
         .initialize(FIXTURE_ID)
         .expect("повторное рукопожатие после таймаута");
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
     process.shutdown();
 }
 
@@ -129,7 +129,7 @@ fn diagnostics_of_control_process_stay_out_of_stdout() {
     let initialized = process
         .initialize(CONTROL_ID)
         .expect("рукопожатие при диагностике в stderr");
-    assert_eq!(initialized.api_version, "1.0.0");
+    assert_eq!(initialized.api_version, "1.1.0");
 
     // stderr читается отдельным потоком; shutdown дожидается его завершения.
     process.shutdown();

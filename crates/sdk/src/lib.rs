@@ -15,14 +15,16 @@ pub use host::{
     ScreenGeometry, FRAME_FORMAT_BGRA8, HOST_CALL_METHOD,
 };
 pub use manifest::{
-    Action, FormCommand, FormState, Manifest, ManifestError, PackageFile, SecretPresence,
-    SettingField, SettingKind, SettingOption, SettingsProfile, SettingsSchema, MANIFEST_VERSION,
-    SETTINGS_SCHEMA_VERSION,
+    Action, ExtensionContribution, ExtensionPoint, ExtensionSelection, FormCommand, FormState,
+    Manifest, ManifestError, PackageFile, SecretPresence, SettingField, SettingKind, SettingOption,
+    SettingsProfile, SettingsSchema, EXTENSIONS_CALL, EXTENSIONS_HOST_API, EXTENSIONS_READ,
+    MANIFEST_VERSION, SETTINGS_SCHEMA_VERSION,
 };
 pub use protocol::{
-    error_codes, CallContext, FormCommandRequest, FormCommandResult, FormFieldError,
-    InitializeParams, InitializeResult, InvocationSource, InvokeRequest, InvokeResult,
-    InvokeStatus, RpcError, RpcResponse, HOST_API_VERSION, INITIALIZE_TIMEOUT, JSONRPC_VERSION,
-    MAX_MESSAGE_BYTES, SHUTDOWN_TIMEOUT,
+    error_codes, CallContext, ExtensionContributionInfo, ExtensionInvokeRequest,
+    ExtensionInvokeResult, ExtensionListParams, ExtensionListResult, FormCommandRequest,
+    FormCommandResult, FormFieldError, InitializeParams, InitializeResult, InvocationSource,
+    InvokeRequest, InvokeResult, InvokeStatus, RpcError, RpcResponse, HOST_API_VERSION,
+    INITIALIZE_TIMEOUT, JSONRPC_VERSION, MAX_MESSAGE_BYTES, SHUTDOWN_TIMEOUT,
 };
 pub use server::{run_stdio, run_stdio_with_io, Module, ModuleInfo, RunError};

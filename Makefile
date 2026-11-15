@@ -59,7 +59,7 @@ help:
 		'make color-picker-reference  — пересоздать эталон пипетки' \
 		'make screen-ocr-check  — обрезка, Tesseract, эталон и процесс OCR' \
 		'make screen-ocr-reference  — пересоздать эталон OCR' \
-		'make qr-code-check  — кодирование, отрисовка, декодирование и эталоны QR' \
+		'make qr-code-check  — кодирование, показ QR, декодирование, эталоны и процесс' \
 		'make qr-code-reference  — пересоздать эталоны QR' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
@@ -109,6 +109,7 @@ bump-version:
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screenshot/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/translator/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screen-ocr/manifest.json
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/qr-code/manifest.json
 	@sed -i 's/Util Maker — прототип [0-9][0-9.]*/Util Maker — прототип $(VERSION)/' installer/README.txt
 	@echo "Версия $(VERSION) записана в Cargo.toml, tauri.conf.json и установщик. Проверьте make check-version."
 
@@ -127,7 +128,7 @@ check-version:
 		echo "Версия Cargo.toml ($$cargo_version) не совпадает с tauri.conf.json ($(VERSION))"; \
 		exit 1; \
 	fi; \
-	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json plugins/screen-ocr/manifest.json; do \
+	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json plugins/screen-ocr/manifest.json plugins/qr-code/manifest.json; do \
 		manifest_version=$$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "$$manifest" | head -n 1); \
 		if [ "$$manifest_version" != "$$cargo_version" ]; then \
 			echo "Версия $$manifest ($$manifest_version) не совпадает с Cargo.toml ($$cargo_version)"; \
@@ -157,7 +158,7 @@ screen-ocr-reference: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "python3 scripts/make-screen-ocr-reference.py"
 
 qr-code-check: dev-image
-	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo test -p util-maker-qr-code"
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-qr-code && cargo test -p util-maker-core --test qr_code_module"
 
 qr-code-reference: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "python3 scripts/make-qr-code-reference.py"

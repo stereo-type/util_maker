@@ -641,6 +641,8 @@ fn register_shortcut(service: &HotkeyService, combo: &str) -> (bool, String) {
 #[serde(rename_all = "camelCase")]
 struct LastResult {
     message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
     module_id: String,
     action_id: String,
     action_name: String,
@@ -680,6 +682,7 @@ fn main() {
             get_status,
             invoke_control,
             invoke_plugin_action,
+            encode_qr_text,
             refresh_plugins,
             get_last_result,
             open_settings_command,
@@ -1067,13 +1070,43 @@ fn open_settings(app: &AppHandle) {
     }
 }
 
+fn activate_qr_result(app: &AppHandle, target: &ActionRef) -> bool {
+    if target.module_id != "org.utilmaker.qr-code" || target.action_id != "show-qr" {
+        return false;
+    }
+    let is_qr = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state.last_result.lock().ok().map(|slot| {
+                slot.as_ref()
+                    .is_some_and(|result| result.action_id == "show-qr")
+            })
+        })
+        .unwrap_or(false);
+    if !is_qr {
+        return false;
+    }
+    let Some(window) = app.get_webview_window(RESULT_WINDOW) else {
+        return false;
+    };
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
+}
+
 fn show_result(app: &AppHandle, result: LastResult) {
+    let qr = result.action_id == "show-qr";
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut slot) = state.last_result.lock() {
             *slot = Some(result);
         }
     }
     if let Some(window) = app.get_webview_window(RESULT_WINDOW) {
+        if qr {
+            let _ = window.set_title("Util Maker — QR-код");
+            let _ = window.set_resizable(true);
+            let _ = window.set_size(PhysicalSize::new(580, 760));
+        }
         let _ = window.eval("window.__umRefresh && window.__umRefresh()");
         let _ = window.show();
         let _ = window.set_focus();
@@ -1081,11 +1114,20 @@ fn show_result(app: &AppHandle, result: LastResult) {
     }
     let mut builder =
         WebviewWindowBuilder::new(app, RESULT_WINDOW, WebviewUrl::App("result.html".into()))
+            .always_on_top(true);
+    builder = if qr {
+        builder
+            .title("Util Maker — QR-код")
+            .inner_size(580.0, 760.0)
+            .min_inner_size(380.0, 480.0)
+            .resizable(true)
+    } else {
+        builder
             .title("Util Maker — результат")
             .inner_size(520.0, 320.0)
             .min_inner_size(420.0, 260.0)
             .resizable(false)
-            .always_on_top(true);
+    };
     if let Some((x, y)) = util_maker_platform::cursor_position() {
         builder = builder.position(x as f64 + 18.0, y as f64 + 18.0);
     } else {
@@ -1403,6 +1445,15 @@ fn invoke_action(
     target: &ActionRef,
     source: InvocationSource,
 ) -> Result<InvokeOutcome, String> {
+    invoke_action_params(app, target, source, serde_json::Value::Null)
+}
+
+fn invoke_action_params(
+    app: &AppHandle,
+    target: &ActionRef,
+    source: InvocationSource,
+    params: serde_json::Value,
+) -> Result<InvokeOutcome, String> {
     logging::debug(&format!(
         "вызов действия module={} action={} source={}",
         target.module_id,
@@ -1421,9 +1472,10 @@ fn invoke_action(
     state
         .catalog
         .registry
-        .invoke_session(
+        .invoke_session_with_params(
             target,
             InvocationContext::new(source),
+            params,
             INVOKE_TIMEOUT,
             Some(logging::logger()),
             &mut host,
@@ -1438,18 +1490,24 @@ fn outcome_status(outcome: &InvokeOutcome) -> &'static str {
         .and_then(|value| value.get("outcome"))
         .and_then(|value| value.as_str());
     match kind {
-        Some("blocked" | "missing-key" | "awaiting-selection" | "manual-input") => "warning",
+        Some(
+            "blocked" | "missing-key" | "awaiting-selection" | "manual-input" | "invalid-input",
+        ) => "warning",
         _ => "ok",
     }
 }
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
+    if activate_qr_result(app, &target) {
+        return;
+    }
     if target.module_id == "org.utilmaker.screenshot" && target.action_id == "capture-region" {
         if let Err(error) = open_screenshot_overlay(app) {
             show_result(
                 app,
                 LastResult {
                     message: format!("Не удалось открыть редактор: {error}"),
+                    data: None,
                     module_id: target.module_id,
                     action_id: target.action_id,
                     action_name: "Снять область".to_owned(),
@@ -1468,6 +1526,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
             app,
             LastResult {
                 message: "Перевод…".to_owned(),
+                data: None,
                 module_id: target.module_id.clone(),
                 action_id: target.action_id.clone(),
                 action_name: action_name_for(app, &target),
@@ -1493,6 +1552,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: outcome.message.clone(),
+                    data: outcome.data.clone(),
                     module_id: outcome.module_id.clone(),
                     action_id: outcome.action_id.clone(),
                     action_name: outcome.action_name.clone(),
@@ -1529,6 +1589,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: format!("Не удалось выполнить действие: {error}"),
+                    data: None,
                     module_id: target.module_id.clone(),
                     action_id: target.action_id.clone(),
                     action_name: action_name_for(app, &target),
@@ -2460,6 +2521,7 @@ async fn invoke_target(
         open_screenshot_overlay(app)?;
         return Ok(LastResult {
             message: "Выделите область в открывшемся редакторе.".to_owned(),
+            data: None,
             module_id: target.module_id,
             action_id: target.action_id,
             action_name: "Снять область".to_owned(),
@@ -2482,6 +2544,7 @@ async fn invoke_target(
             .map_err(|error| format!("задача вызова прервана: {error}"))??;
     let last = LastResult {
         message: outcome.message.clone(),
+        data: outcome.data.clone(),
         module_id: outcome.module_id.clone(),
         action_id: outcome.action_id.clone(),
         action_name: outcome.action_name.clone(),
@@ -2511,6 +2574,27 @@ async fn invoke_plugin_action(
     source: Option<String>,
 ) -> Result<LastResult, String> {
     invoke_target(&app, ActionRef::new(module_id, action_id), source).await
+}
+
+#[tauri::command]
+fn encode_qr_text(
+    app: AppHandle,
+    text: String,
+    width: u32,
+    height: u32,
+) -> Result<serde_json::Value, String> {
+    let target = ActionRef::new("org.utilmaker.qr-code", "show-qr");
+    let outcome = invoke_action_params(
+        &app,
+        &target,
+        InvocationSource::Hotkey,
+        serde_json::json!({
+            "manualText": text,
+            "windowWidth": width,
+            "windowHeight": height,
+        }),
+    )?;
+    Ok(outcome.data.unwrap_or(serde_json::Value::Null))
 }
 
 #[tauri::command]
@@ -2740,6 +2824,7 @@ fn terminate_module_processes() {
             "control-module.exe",
             "screenshot-plugin.exe",
             "translator-module.exe",
+            "qr-code-module.exe",
         ] {
             let _ = std::process::Command::new("taskkill")
                 .args(["/F", "/IM", name])
@@ -2749,7 +2834,12 @@ fn terminate_module_processes() {
     }
     #[cfg(not(windows))]
     {
-        for name in ["control-module", "screenshot-plugin", "translator-module"] {
+        for name in [
+            "control-module",
+            "screenshot-plugin",
+            "translator-module",
+            "qr-code-module",
+        ] {
             let _ = std::process::Command::new("pkill")
                 .args(["-f", name])
                 .status();

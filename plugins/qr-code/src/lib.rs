@@ -8,10 +8,15 @@
 use qrcodegen::{QrCode, QrCodeEcc, QrSegment, Version};
 
 mod decode;
+mod show;
 
 pub use decode::{
     decode_qr, DecodeOutcome, FrameError, GrayImage, ImageError, QrFrame, QrText, Selection,
     BYTES_PER_PIXEL,
+};
+pub use show::{
+    InputSource, ManualReason, QrView, SelectionRead, ShowError, ShowPhase, ShowStart, ShowView,
+    ShowWindow, WindowSize, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
 
 /// Минимальное белое поле вокруг кода в модулях.
@@ -116,13 +121,13 @@ impl QrMatrix {
         &self.modules
     }
 
-    /// Отрисовывает код по центру окна.
+    /// Рассчитывает целый масштаб модулей для окна.
     ///
     /// Масштаб — наибольшее целое число, при котором код вместе с полем
     /// помещается в окно. Свободное место остаётся белым, поэтому фактическое
     /// поле может быть больше четырёх модулей. Если даже один пиксель на модуль
     /// не помещается, возвращается [`RenderError::TooSmall`].
-    pub fn render(&self, width: u32, height: u32) -> Result<QrImage, RenderError> {
+    pub fn layout(&self, width: u32, height: u32) -> Result<QrLayout, RenderError> {
         if width == 0 || height == 0 {
             return Err(RenderError::EmptyWindow);
         }
@@ -135,21 +140,37 @@ impl QrMatrix {
                 minimum: total_modules,
             });
         }
-
-        let mut pixels = vec![255u8; width as usize * height as usize];
         let code_size = total_modules * scale;
-        let offset_x = (width - code_size) / 2;
-        let offset_y = (height - code_size) / 2;
+        Ok(QrLayout {
+            width,
+            height,
+            scale,
+            total_modules,
+            code_size,
+            offset_x: (width - code_size) / 2,
+            offset_y: (height - code_size) / 2,
+            quiet_zone: QUIET_ZONE_MODULES,
+        })
+    }
+
+    /// Отрисовывает код по центру окна.
+    ///
+    /// Масштаб рассчитывает [`Self::layout`]. Пиксели остаются только чёрными
+    /// (`0`) или белыми (`255`), поэтому модуль всегда занимает целое число
+    /// физических пикселей.
+    pub fn render(&self, width: u32, height: u32) -> Result<QrImage, RenderError> {
+        let layout = self.layout(width, height)?;
+        let mut pixels = vec![255u8; width as usize * height as usize];
         for y in 0..self.size {
             for x in 0..self.size {
                 if !self.module(x, y) {
                     continue;
                 }
-                let left = offset_x + (QUIET_ZONE_MODULES + x as u32) * scale;
-                let top = offset_y + (QUIET_ZONE_MODULES + y as u32) * scale;
-                for py in top..top + scale {
+                let left = layout.offset_x + (QUIET_ZONE_MODULES + x as u32) * layout.scale;
+                let top = layout.offset_y + (QUIET_ZONE_MODULES + y as u32) * layout.scale;
+                for py in top..top + layout.scale {
                     let row = py as usize * width as usize;
-                    for px in left..left + scale {
+                    for px in left..left + layout.scale {
                         pixels[row + px as usize] = 0;
                     }
                 }
@@ -159,7 +180,7 @@ impl QrMatrix {
         Ok(QrImage {
             width,
             height,
-            scale,
+            scale: layout.scale,
             pixels,
         })
     }
@@ -197,6 +218,20 @@ impl QrImage {
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
+}
+
+/// Раскладка QR в окне: целый масштаб, центрирование и белое поле.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QrLayout {
+    pub width: u32,
+    pub height: u32,
+    pub scale: u32,
+    pub total_modules: u32,
+    pub code_size: u32,
+    pub offset_x: u32,
+    pub offset_y: u32,
+    pub quiet_zone: u32,
 }
 
 #[cfg(test)]

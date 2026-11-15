@@ -4,13 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "QR-коды: кодирование текста и отрисовка матрицы в физических пикселях"
+description = "QR-коды: кодирование текста, окно показа и декодирование области"
+
+[[bin]]
+name = "qr-code-module"
+path = "src/main.rs"
 
 [dependencies]
 qrcodegen = "1.8"
 rqrr = "0.11"
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 util-maker-sdk.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

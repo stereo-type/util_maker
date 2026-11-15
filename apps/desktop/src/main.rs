@@ -756,6 +756,7 @@ fn main() {
                 set_shortcut_status(app.handle(), "отключён");
             }
             spawn_hotkey_listener(app.handle().clone(), events);
+            spawn_session_watchdog(app.handle().clone());
             let first_run = mark_and_check_first_run(app.handle())?;
             if first_run {
                 logging::write("первый запуск: открываю настройки");
@@ -2572,14 +2573,32 @@ fn quit_app(app: AppHandle) {
 }
 
 /// Завершает хост и не оставляет дочерних процессов модулей.
+fn spawn_session_watchdog(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(5));
+        let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+            continue;
+        };
+        if runtime.paused.load(Ordering::SeqCst) {
+            continue;
+        }
+        if !runtime.registered.load(Ordering::SeqCst) {
+            let registered = runtime.register_all();
+            runtime.registered.store(registered, Ordering::SeqCst);
+            if registered {
+                set_shortcut_status(&app, "зарегистрировано");
+            }
+        }
+        if let Some(tray) = app.tray_by_id("main") {
+            let _ = tray.set_visible(true);
+        }
+    });
+}
+
 fn quit_application(app: &AppHandle) {
     logging::write("выход: освобождаю сочетание и завершаю дочерние процессы");
     if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
-        runtime
-            .service
-            .lock()
-            .expect("служба сочетаний")
-            .unregister(HOTKEY_ID);
+        runtime.unregister_all();
     }
     if let Some(state) = app.try_state::<AppState>() {
         state.catalog.registry.cancel_all();
@@ -2592,16 +2611,24 @@ fn terminate_module_processes() {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "control-module.exe"])
-            .creation_flags(0x0800_0000)
-            .status();
+        for name in [
+            "control-module.exe",
+            "screenshot-plugin.exe",
+            "translator-module.exe",
+        ] {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/IM", name])
+                .creation_flags(0x0800_0000)
+                .status();
+        }
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("pkill")
-            .args(["-f", "control-module"])
-            .status();
+        for name in ["control-module", "screenshot-plugin", "translator-module"] {
+            let _ = std::process::Command::new("pkill")
+                .args(["-f", name])
+                .status();
+        }
     }
 }
 

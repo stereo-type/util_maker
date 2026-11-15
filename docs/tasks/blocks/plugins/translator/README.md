@@ -9,3 +9,4 @@
 | [Не показывать заблокированный перевод как успех](blocked-result-status.md) | ✅ Выполнена |
 | [Сохранять ключ под профилем выбранного сервиса](secret-profile-mismatch.md) | ✅ Выполнена |
 | [Читать выделение Блокнота через UI Automation](selection-notepad-context-lost.md) | 📥 К выполнению |
+| [Перевести переводчик на провайдеров-плагинов](provider-extension-point.md) | 📥 К выполнению |

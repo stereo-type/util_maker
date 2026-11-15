@@ -686,6 +686,7 @@ fn main() {
             copy_text,
             get_overlay_frame,
             get_overlay_geometry,
+            get_editor_image,
             open_screenshot_editor,
             copy_overlay_image,
             close_overlay,
@@ -1174,6 +1175,10 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
     let _ = window.set_always_on_top(true);
     let _ = window.show();
     let _ = window.set_focus();
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        util_maker_platform::raise_window(hwnd.0 as isize);
+    }
     Ok(())
 }
 
@@ -1275,6 +1280,53 @@ fn show_editor_window(
     let _ = window.show();
     let _ = window.set_focus();
     Ok(())
+}
+
+#[tauri::command]
+fn get_editor_image(
+    app: AppHandle,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let overlay = state.overlay.lock().map_err(|error| error.to_string())?;
+    let frame = overlay
+        .as_ref()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    if width == 0 || height == 0 || x < 0 || y < 0 {
+        return Err("некорректная область".to_owned());
+    }
+    if x as u32 + width > frame.width || y as u32 + height > frame.height {
+        return Err("область выходит за пределы кадра".to_owned());
+    }
+    let stride = frame.width as usize * 4;
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for row in 0..height as usize {
+        let start = (y as usize + row) * stride + x as usize * 4;
+        let line = &frame.data[start..start + width as usize * 4];
+        for pixel in line.as_chunks::<4>().0 {
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+        }
+    }
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(&rgba)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    ))
 }
 
 #[tauri::command]

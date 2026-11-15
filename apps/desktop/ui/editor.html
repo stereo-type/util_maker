@@ -142,19 +142,16 @@
 
       (async () => {
         try {
-          const frame = await invoke("get_overlay_frame");
-          const bytes = Uint8ClampedArray.from({ length: frame.data.length / 2 }, (_, index) => parseInt(frame.data.slice(index * 2, index * 2 + 2), 16));
-          canvas.width = source.w; canvas.height = source.h;
-          const full = document.createElement("canvas");
-          full.width = frame.width; full.height = frame.height;
-          const fullContext = full.getContext("2d", { willReadFrequently: true });
-          const all = fullContext.createImageData(frame.width, frame.height);
-          for (let index = 0, offset = 0; index < bytes.length; index += 4, offset += 4) {
-            all.data[offset] = bytes[index + 2]; all.data[offset + 1] = bytes[index + 1]; all.data[offset + 2] = bytes[index]; all.data[offset + 3] = 255;
-          }
-          fullContext.putImageData(all, 0, 0);
-          imageData = fullContext.getImageData(source.x, source.y, source.w, source.h);
-          context.putImageData(imageData, 0, 0);
+          canvas.width = source.w;
+          canvas.height = source.h;
+          const dataUrl = await invoke("get_editor_image", {
+            x: source.x, y: source.y, width: source.w, height: source.h,
+          });
+          const image = new Image();
+          image.src = dataUrl;
+          await image.decode();
+          context.drawImage(image, 0, 0);
+          imageData = context.getImageData(0, 0, source.w, source.h);
         } catch (error) {
           status.textContent = `Не удалось загрузить снимок: ${error}`;
         }

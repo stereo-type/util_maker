@@ -321,6 +321,31 @@ pub fn cursor_position() -> Option<(i32, i32)> {
     None
 }
 
+/// Поднимает окно поверх остальных и на передний план.
+#[cfg(windows)]
+pub fn raise_window(handle: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    };
+    let hwnd = HWND(handle as *mut std::ffi::c_void);
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn raise_window(_handle: isize) {}
+
 /// Поднимает окно на передний план в Windows. На других ОС — no-op.
 #[cfg(windows)]
 pub fn focus_window(handle: isize) {

@@ -15,6 +15,8 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
+base64 = "0.22"
+png = "0.17"
 util-maker-core.workspace = true
 util-maker-sdk.workspace = true
 util-maker-platform.workspace = true

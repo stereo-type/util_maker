@@ -28,6 +28,12 @@ fn manifest_is_valid_and_declares_action() {
         manifest.resolved_entrypoint("windows-x64").unwrap(),
         PathBuf::from("screenshot-plugin.exe")
     );
+    let settings = manifest.settings.as_ref().expect("настройки скриншотов");
+    let field = settings
+        .top_field("saveDirectory")
+        .expect("поле папки сохранения");
+    assert_eq!(field.kind, util_maker_sdk::SettingKind::Text);
+    assert_eq!(field.default, Some(serde_json::json!("")));
 }
 
 #[test]

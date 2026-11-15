@@ -5,7 +5,7 @@
 | Раздел | Состояние | Количество |
 | --- | --- | ---: |
 | [Скриншоты](blocks/plugins/screenshot/README.md) | Не сделано | 1 |
-| [Скриншоты](blocks/plugins/screenshot/README.md) | На ревью | 2 |
+| [Скриншоты](blocks/plugins/screenshot/README.md) | На ревью | 3 |
 | [Переводчик](blocks/plugins/translator/README.md) | Не сделано | 2 |
 | [Переводчик](blocks/plugins/translator/README.md) | На ревью | 1 |
 | [Desktop-хост](blocks/desktop/README.md) | Не сделано | 2 |

@@ -92,6 +92,8 @@
       dd { margin: 0; overflow-wrap: anywhere; }
       code, kbd { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
       kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+      .hotkey-chip { display: inline-flex; align-items: center; gap: 2px; }
+      .icon-button { padding: 2px 7px; border: none; font-size: 15px; line-height: 1; }
       button {
         font: inherit;
         border-radius: 8px;
@@ -167,6 +169,7 @@
         <div id="plugin-list" role="list">Загрузка…</div>
         <div id="plugin-detail" hidden>
           <h3>Действия</h3>
+          <input id="shortcut-search" class="hotkey-input" type="search" placeholder="Поиск по действию или сочетанию" aria-label="Поиск действий" />
           <div id="plugin-actions"></div>
           <div id="plugin-settings"></div>
           <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
@@ -247,6 +250,7 @@
         detail: document.getElementById("plugin-detail"),
         actions: document.getElementById("plugin-actions"),
         settings: document.getElementById("plugin-settings"),
+        search: document.getElementById("shortcut-search"),
         result: document.getElementById("result"),
         packagePath: document.getElementById("package-path"),
         packagePublisher: document.getElementById("package-publisher"),
@@ -353,10 +357,30 @@
         right.style.display = "flex";
         right.style.gap = "8px";
         right.style.alignItems = "center";
-        if (action.hotkey) {
+        const hotkeys = action.hotkeys?.length ? action.hotkeys : (action.hotkey ? [action.hotkey] : []);
+        for (const combo of hotkeys) {
+          const chip = document.createElement("span");
+          chip.className = "hotkey-chip";
           const hotkey = document.createElement("kbd");
-          hotkey.textContent = action.hotkey;
-          right.append(hotkey);
+          hotkey.textContent = combo;
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "icon-button";
+          remove.textContent = "×";
+          remove.title = `Удалить сочетание ${combo}`;
+          remove.setAttribute("aria-label", `Удалить сочетание ${combo}`);
+          remove.addEventListener("click", async () => {
+            try {
+              await invoke("remove_action_shortcut", {
+                moduleId: plugin.id, actionId: action.id, combo,
+              });
+              await loadPlugins();
+            } catch (error) {
+              showResult(`Не удалось удалить сочетание: ${error}`, "error");
+            }
+          });
+          chip.append(hotkey, remove);
+          right.append(chip);
         }
         const run = document.createElement("button");
         run.type = "button";
@@ -365,9 +389,27 @@
         run.addEventListener("click", () => invokeAction(plugin, action));
         const edit = document.createElement("button");
         edit.type = "button";
-        edit.textContent = "Изменить сочетание";
-        edit.addEventListener("click", () => openHotkey(plugin, action));
-        right.append(run, edit);
+        edit.textContent = "Изменить";
+        edit.addEventListener("click", () => openHotkey(plugin, action, "change"));
+        const add = document.createElement("button");
+        add.type = "button";
+        add.textContent = "+";
+        add.title = "Добавить сочетание";
+        add.setAttribute("aria-label", `Добавить сочетание для ${action.name}`);
+        add.addEventListener("click", () => openHotkey(plugin, action, "add"));
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.textContent = "Сбросить";
+        reset.title = "Вернуть рекомендованное сочетание";
+        reset.addEventListener("click", async () => {
+          try {
+            await invoke("reset_action_shortcut", { moduleId: plugin.id, actionId: action.id });
+            await loadPlugins();
+          } catch (error) {
+            showResult(`Не удалось сбросить сочетание: ${error}`, "error");
+          }
+        });
+        right.append(run, edit, add, reset);
         top.append(text, right);
         card.append(top);
         return card;
@@ -473,6 +515,7 @@
         currentPlugin = plugin;
         elements.detail.hidden = false;
         elements.actions.innerHTML = "";
+        if (elements.search) elements.search.value = "";
         if (!plugin.installed) {
           showResult("Пакет отсутствует в установленной поставке.", "");
           return;
@@ -555,10 +598,13 @@
         return "";
       }
 
-      function openHotkey(plugin, action) {
-        hotkeyTarget = { pluginId: plugin.id, actionId: action.id, pluginName: plugin.name, actionName: action.name };
+      function openHotkey(plugin, action, mode = "change") {
+        hotkeyTarget = {
+          pluginId: plugin.id, actionId: action.id,
+          pluginName: plugin.name, actionName: action.name, mode,
+        };
         elements.modalTarget.textContent = `${plugin.name} — ${action.name}`;
-        elements.input.value = action.hotkey || "";
+        elements.input.value = mode === "add" ? "" : (action.hotkey || "");
         setHotkeyStatus("Нажмите клавиши или введите сочетание и сохраните.", "");
         hotkeyTrigger = document.activeElement;
         elements.modal.hidden = false;
@@ -578,7 +624,8 @@
       async function saveHotkey() {
         if (!hotkeyTarget) return;
         try {
-          await invoke("change_action_shortcut", {
+          const command = hotkeyTarget.mode === "add" ? "add_action_shortcut" : "change_action_shortcut";
+          await invoke(command, {
             moduleId: hotkeyTarget.pluginId,
             actionId: hotkeyTarget.actionId,
             combo: elements.input.value,
@@ -586,7 +633,23 @@
           closeHotkey();
           await loadPlugins();
         } catch (error) {
-          setHotkeyStatus(String(error), "error");
+          const message = String(error);
+          if (message.includes("уже назначено") && window.confirm(`${message}\n\nПеренести сочетание?`)) {
+            try {
+              await invoke("move_action_shortcut", {
+                moduleId: hotkeyTarget.pluginId,
+                actionId: hotkeyTarget.actionId,
+                combo: elements.input.value,
+              });
+              closeHotkey();
+              await loadPlugins();
+              return;
+            } catch (moveError) {
+              setHotkeyStatus(String(moveError), "error");
+              return;
+            }
+          }
+          setHotkeyStatus(message, "error");
         }
       }
 
@@ -721,6 +784,13 @@
 
       elements.packagePreview.addEventListener("click", previewPackage);
       elements.packageInstall.addEventListener("click", installPackage);
+
+      elements.search?.addEventListener("input", () => {
+        const query = elements.search.value.trim().toLowerCase();
+        for (const card of elements.actions.querySelectorAll(".action-card")) {
+          card.hidden = query.length > 0 && !card.textContent.toLowerCase().includes(query);
+        }
+      });
 
       async function loadAutostart() {
         try {

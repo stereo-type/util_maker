@@ -480,22 +480,53 @@ fn shortcut_map_path(app: &AppHandle) -> Option<PathBuf> {
         .map(|directory| directory.join("shortcuts.json"))
 }
 
-fn persisted_shortcut_map(app: &AppHandle) -> BTreeMap<String, String> {
-    shortcut_map_path(app)
-        .and_then(|path| std::fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+fn persisted_shortcut_map(app: &AppHandle) -> BTreeMap<String, Vec<String>> {
+    let Some(path) = shortcut_map_path(app) else {
+        return BTreeMap::new();
+    };
+    let Some(bytes) = std::fs::read(path).ok() else {
+        return BTreeMap::new();
+    };
+    if let Ok(map) = serde_json::from_slice::<BTreeMap<String, Vec<String>>>(&bytes) {
+        return map;
+    }
+    if let Ok(old) = serde_json::from_slice::<BTreeMap<String, String>>(&bytes) {
+        return old
+            .into_iter()
+            .map(|(key, combo)| (key, vec![combo]))
+            .collect();
+    }
+    BTreeMap::new()
 }
 
-fn save_action_shortcut(app: &AppHandle, module_id: &str, action_id: &str, combo: &str) {
+fn write_shortcut_map(app: &AppHandle, map: &BTreeMap<String, Vec<String>>) {
     let Some(path) = shortcut_map_path(app) else {
         return;
     };
-    let mut map = persisted_shortcut_map(app);
-    map.insert(format!("{module_id}/{action_id}"), combo.to_owned());
-    if let Ok(bytes) = serde_json::to_vec_pretty(&map) {
+    if let Ok(bytes) = serde_json::to_vec_pretty(map) {
         let _ = std::fs::write(path, bytes);
     }
+}
+
+fn save_action_shortcut(app: &AppHandle, module_id: &str, action_id: &str, combo: &str) {
+    let mut map = persisted_shortcut_map(app);
+    let entry = map.entry(format!("{module_id}/{action_id}")).or_default();
+    if !entry.iter().any(|value| value == combo) {
+        entry.push(combo.to_owned());
+    }
+    write_shortcut_map(app, &map);
+}
+
+fn remove_saved_shortcut(app: &AppHandle, module_id: &str, action_id: &str, combo: &str) {
+    let mut map = persisted_shortcut_map(app);
+    let key = format!("{module_id}/{action_id}");
+    if let Some(entry) = map.get_mut(&key) {
+        entry.retain(|value| value != combo);
+        if entry.is_empty() {
+            map.remove(&key);
+        }
+    }
+    write_shortcut_map(app, &map);
 }
 
 fn sync_action_hotkeys(app: &AppHandle) {
@@ -507,7 +538,7 @@ fn sync_action_hotkeys(app: &AppHandle) {
     };
     let actions = state.catalog.registry.actions();
     let persisted = persisted_shortcut_map(app);
-    let existing: BTreeSet<(String, String)> = runtime
+    let existing: BTreeSet<(String, String, String)> = runtime
         .registrations
         .lock()
         .map(|registrations| {
@@ -517,17 +548,15 @@ fn sync_action_hotkeys(app: &AppHandle) {
                     (
                         entry.target.module_id.clone(),
                         entry.target.action_id.clone(),
+                        entry.combo.clone(),
                     )
                 })
                 .collect()
         })
         .unwrap_or_default();
     for action in actions {
-        if existing.contains(&(action.module_id.clone(), action.action_id.clone())) {
-            continue;
-        }
         let key = format!("{}/{}", action.module_id, action.action_id);
-        let Some(combo) = persisted.get(&key).cloned().or_else(|| {
+        let combos = persisted.get(&key).cloned().unwrap_or_else(|| {
             state
                 .catalog
                 .registry
@@ -536,37 +565,46 @@ fn sync_action_hotkeys(app: &AppHandle) {
                     entry
                         .manifest
                         .action(&action.action_id)
-                        .and_then(|manifest_action| {
-                            manifest_action.recommended_hotkeys.first().cloned()
-                        })
+                        .map(|manifest_action| manifest_action.recommended_hotkeys.clone())
                 })
-        }) else {
-            continue;
-        };
-        let id = runtime.next_id.fetch_add(1, Ordering::SeqCst);
-        let registered = {
-            let service = runtime.service.lock().expect("служба сочетаний");
-            service.register(&combo, id).is_ok()
-        };
-        if registered {
-            if let Ok(mut registrations) = runtime.registrations.lock() {
-                registrations.insert(
-                    id,
-                    Registration {
-                        combo: combo.clone(),
-                        target: ActionRef::new(action.module_id.clone(), action.action_id.clone()),
-                    },
-                );
+                .unwrap_or_default()
+        });
+        for combo in combos {
+            if existing.contains(&(
+                action.module_id.clone(),
+                action.action_id.clone(),
+                combo.clone(),
+            )) {
+                continue;
             }
-            logging::write(&format!(
-                "сочетание {combo}: {} / {}",
-                action.module_id, action.action_id
-            ));
-        } else {
-            logging::write(&format!(
-                "сочетание {combo} для {} / {} не зарегистрировано",
-                action.module_id, action.action_id
-            ));
+            let id = runtime.next_id.fetch_add(1, Ordering::SeqCst);
+            let registered = {
+                let service = runtime.service.lock().expect("служба сочетаний");
+                service.register(&combo, id).is_ok()
+            };
+            if registered {
+                if let Ok(mut registrations) = runtime.registrations.lock() {
+                    registrations.insert(
+                        id,
+                        Registration {
+                            combo: combo.clone(),
+                            target: ActionRef::new(
+                                action.module_id.clone(),
+                                action.action_id.clone(),
+                            ),
+                        },
+                    );
+                }
+                logging::write(&format!(
+                    "сочетание {combo}: {} / {}",
+                    action.module_id, action.action_id
+                ));
+            } else {
+                logging::write(&format!(
+                    "сочетание {combo} для {} / {} не зарегистрировано",
+                    action.module_id, action.action_id
+                ));
+            }
         }
     }
 }
@@ -645,6 +683,10 @@ fn main() {
             remove_package,
             set_plugin_enabled,
             change_action_shortcut,
+            add_action_shortcut,
+            move_action_shortcut,
+            remove_action_shortcut,
+            reset_action_shortcut,
             change_control_shortcut,
             quit_app
         ])
@@ -1211,6 +1253,7 @@ struct PluginActionDto {
     name: String,
     description: String,
     hotkey: Option<String>,
+    hotkeys: Vec<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -1269,7 +1312,10 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
                         id: action.id.clone(),
                         name: action.name.clone(),
                         description: action.description().to_owned(),
-                        hotkey: action_hotkey(app, &entry.manifest, action),
+                        hotkey: action_hotkeys(app, &entry.manifest, action)
+                            .first()
+                            .cloned(),
+                        hotkeys: action_hotkeys(app, &entry.manifest, action),
                     })
                     .collect(),
             }
@@ -1277,18 +1323,25 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
         .collect()
 }
 
-fn action_hotkey(app: &AppHandle, manifest: &Manifest, action: &Action) -> Option<String> {
+fn action_hotkeys(app: &AppHandle, manifest: &Manifest, action: &Action) -> Vec<String> {
     if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
         if let Ok(registrations) = runtime.registrations.lock() {
-            if let Some(registration) = registrations.values().find(|registration| {
-                registration.target.module_id == manifest.id
-                    && registration.target.action_id == action.id
-            }) {
-                return Some(registration.combo.clone());
+            let mut combos: Vec<String> = registrations
+                .values()
+                .filter(|registration| {
+                    registration.target.module_id == manifest.id
+                        && registration.target.action_id == action.id
+                })
+                .map(|registration| registration.combo.clone())
+                .collect();
+            combos.sort();
+            combos.dedup();
+            if !combos.is_empty() {
+                return combos;
             }
         }
     }
-    action.recommended_hotkeys.first().cloned()
+    action.recommended_hotkeys.clone()
 }
 
 fn refresh_plugins_inner(app: &AppHandle) -> Vec<PluginDto> {
@@ -1611,6 +1664,190 @@ fn change_action_shortcut(
             Err(register_failure_message(error))
         }
     }
+}
+
+#[tauri::command]
+fn add_action_shortcut(
+    app: AppHandle,
+    module_id: String,
+    action_id: String,
+    combo: String,
+) -> Result<String, String> {
+    let normalized = util_maker_core::hotkeys::Hotkey::parse(&combo)
+        .map_err(|error| error.to_string())?
+        .canonical();
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return Err("служба сочетаний недоступна".to_owned());
+    };
+    if let Ok(registrations) = runtime.registrations.lock() {
+        if let Some(owner) = registrations
+            .values()
+            .find(|registration| registration.combo == normalized)
+        {
+            return Err(format!(
+                "сочетание уже назначено действию {} / {}",
+                owner.target.module_id, owner.target.action_id
+            ));
+        }
+    }
+    let id = runtime.next_id.fetch_add(1, Ordering::SeqCst);
+    {
+        let service = runtime.service.lock().expect("служба сочетаний");
+        service
+            .register(&normalized, id)
+            .map_err(register_failure_message)?;
+    }
+    if let Ok(mut registrations) = runtime.registrations.lock() {
+        registrations.insert(
+            id,
+            Registration {
+                combo: normalized.clone(),
+                target: ActionRef::new(module_id.clone(), action_id.clone()),
+            },
+        );
+    }
+    save_action_shortcut(&app, &module_id, &action_id, &normalized);
+    Ok(normalized)
+}
+
+#[tauri::command]
+fn move_action_shortcut(
+    app: AppHandle,
+    module_id: String,
+    action_id: String,
+    combo: String,
+) -> Result<String, String> {
+    let normalized = util_maker_core::hotkeys::Hotkey::parse(&combo)
+        .map_err(|error| error.to_string())?
+        .canonical();
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return Err("служба сочетаний недоступна".to_owned());
+    };
+    let (owner_id, owner) = {
+        let mut registrations = runtime
+            .registrations
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let owner = registrations
+            .iter()
+            .find(|(_, registration)| registration.combo == normalized)
+            .map(|(id, registration)| (*id, registration.clone()));
+        if let Some((id, _)) = &owner {
+            registrations.remove(id);
+        }
+        owner.ok_or_else(|| "сочетание свободно".to_owned())?
+    };
+    runtime
+        .service
+        .lock()
+        .expect("служба сочетаний")
+        .unregister(owner_id);
+    remove_saved_shortcut(
+        &app,
+        &owner.target.module_id,
+        &owner.target.action_id,
+        &normalized,
+    );
+    let id = runtime.next_id.fetch_add(1, Ordering::SeqCst);
+    {
+        let service = runtime.service.lock().expect("служба сочетаний");
+        service
+            .register(&normalized, id)
+            .map_err(register_failure_message)?;
+    }
+    if let Ok(mut registrations) = runtime.registrations.lock() {
+        registrations.insert(
+            id,
+            Registration {
+                combo: normalized.clone(),
+                target: ActionRef::new(module_id.clone(), action_id.clone()),
+            },
+        );
+    }
+    save_action_shortcut(&app, &module_id, &action_id, &normalized);
+    Ok(normalized)
+}
+
+#[tauri::command]
+fn remove_action_shortcut(
+    app: AppHandle,
+    module_id: String,
+    action_id: String,
+    combo: String,
+) -> Result<(), String> {
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return Err("служба сочетаний недоступна".to_owned());
+    };
+    let normalized = util_maker_core::hotkeys::Hotkey::parse(&combo)
+        .map_err(|error| error.to_string())?
+        .canonical();
+    let id = {
+        let mut registrations = runtime
+            .registrations
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let id = registrations
+            .iter()
+            .find(|(_, registration)| {
+                registration.target.module_id == module_id
+                    && registration.target.action_id == action_id
+                    && registration.combo == normalized
+            })
+            .map(|(id, _)| *id);
+        if let Some(id) = id {
+            registrations.remove(&id);
+        }
+        id
+    };
+    if let Some(id) = id {
+        runtime
+            .service
+            .lock()
+            .expect("служба сочетаний")
+            .unregister(id);
+    }
+    remove_saved_shortcut(&app, &module_id, &action_id, &normalized);
+    Ok(())
+}
+
+#[tauri::command]
+fn reset_action_shortcut(
+    app: AppHandle,
+    module_id: String,
+    action_id: String,
+) -> Result<(), String> {
+    let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
+        return Err("служба сочетаний недоступна".to_owned());
+    };
+    let ids: Vec<u32> = {
+        let mut registrations = runtime
+            .registrations
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let ids = registrations
+            .iter()
+            .filter(|(_, registration)| {
+                registration.target.module_id == module_id
+                    && registration.target.action_id == action_id
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &ids {
+            registrations.remove(id);
+        }
+        ids
+    };
+    {
+        let service = runtime.service.lock().expect("служба сочетаний");
+        for id in ids {
+            service.unregister(id);
+        }
+    }
+    let mut map = persisted_shortcut_map(&app);
+    map.remove(&format!("{module_id}/{action_id}"));
+    write_shortcut_map(&app, &map);
+    sync_action_hotkeys(&app);
+    Ok(())
 }
 
 #[tauri::command]

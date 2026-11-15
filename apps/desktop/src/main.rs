@@ -2825,6 +2825,7 @@ fn terminate_module_processes() {
             "screenshot-plugin.exe",
             "translator-module.exe",
             "qr-code-module.exe",
+            "color-picker-module.exe",
         ] {
             let _ = std::process::Command::new("taskkill")
                 .args(["/F", "/IM", name])
@@ -2839,6 +2840,7 @@ fn terminate_module_processes() {
             "screenshot-plugin",
             "translator-module",
             "qr-code-module",
+            "color-picker-module",
         ] {
             let _ = std::process::Command::new("pkill")
                 .args(["-f", name])

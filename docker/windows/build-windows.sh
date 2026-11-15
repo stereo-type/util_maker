@@ -1,5 +1,5 @@
 #!/bin/sh
-# Собирает хост и контрольный модуль под x86_64-pc-windows-msvc и упаковывает
+# Собирает хост и штатные пакеты под x86_64-pc-windows-msvc и упаковывает
 # NSIS-установщик в /workspace/dist. Запускается внутри контейнера
 # docker/windows из цели `make build-windows`.
 set -eu
@@ -19,17 +19,21 @@ export CARGO_TARGET_DIR="$target_dir"
 echo "Util Maker $version: сборка x86_64-pc-windows-msvc, тип ${UTIL_MAKER_BUILD:-dev}"
 cargo xwin build --release --target x86_64-pc-windows-msvc \
     -p util-maker-desktop -p util-maker-control-module -p util-maker-screenshots -p util-maker-translator \
-    --bin util-maker-desktop --bin control-module --bin screenshot-plugin --bin translator-module
+    -p util-maker-color-picker \
+    --bin util-maker-desktop --bin control-module --bin screenshot-plugin --bin translator-module \
+    --bin color-picker-module
 
 exe="$target_dir/x86_64-pc-windows-msvc/release/util-maker-desktop.exe"
 module="$target_dir/x86_64-pc-windows-msvc/release/control-module.exe"
 screenshot_module="$target_dir/x86_64-pc-windows-msvc/release/screenshot-plugin.exe"
 translator_module="$target_dir/x86_64-pc-windows-msvc/release/translator-module.exe"
+color_picker_module="$target_dir/x86_64-pc-windows-msvc/release/color-picker-module.exe"
 manifest="/workspace/plugins/control/manifest.json"
 screenshot_manifest="/workspace/plugins/screenshot/manifest.json"
 translator_manifest="/workspace/plugins/translator/manifest.json"
+color_picker_manifest="/workspace/plugins/color-picker/manifest.json"
 
-for file in "$exe" "$module" "$manifest" "$screenshot_module" "$screenshot_manifest" "$translator_module" "$translator_manifest"; do
+for file in "$exe" "$module" "$manifest" "$screenshot_module" "$screenshot_manifest" "$translator_module" "$translator_manifest" "$color_picker_module" "$color_picker_manifest"; do
     if [ ! -f "$file" ]; then
         echo "Не найден обязательный файл сборки: $file" >&2
         exit 1
@@ -85,6 +89,7 @@ package_plugin() {
 
 package_plugin org.utilmaker.screenshot "$screenshot_module" "$screenshot_manifest" /workspace/plugins/screenshot/assets/icon.png
 package_plugin org.utilmaker.translator "$translator_module" "$translator_manifest" ""
+package_plugin org.utilmaker.color-picker "$color_picker_module" "$color_picker_manifest" /workspace/plugins/color-picker/assets/icon.png
 
 rm -rf "$package_dir/staging"
 

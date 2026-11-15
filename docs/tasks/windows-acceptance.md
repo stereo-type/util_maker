@@ -1,5 +1,8 @@
 # Проверка Util Maker на Windows
 
+Исторический чек-лист 0.4.5. Актуальный протокол приёмки —
+[windows-release-protocol.md](windows-release-protocol.md).
+
 Версия: **0.4.5-dev**. Установщик: `dist/UtilMaker-Setup-0.4.5-dev.exe`.
 Ревизия: `f150b03`. Проверка выполняется на Windows 11 x64.
 

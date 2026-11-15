@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use util_maker_core::ipc::ModuleProcess;
 use util_maker_packages::{
     verify_path, InstalledModule, PackageError, PackagePreview, PackageStore, TrustStore,
 };
@@ -83,6 +84,18 @@ impl PackageManager {
         let installed = self
             .store
             .install(package, &self.trust, platform(), &host_version())?;
+        if let Err(error) = handshake(&installed) {
+            // Кандидат не прошёл рукопожатие: возвращаем предыдущую пару.
+            if self.store.rollback(&installed.id).is_err() {
+                let _ = self.store.remove(&installed.id);
+            }
+            if let Some(previous) = self.store.module(&installed.id) {
+                let _ = self.store.publish_to(&previous.id, &self.catalog_root);
+            }
+            return Err(PackageError::Install(format!(
+                "кандидат не прошёл рукопожатие: {error}"
+            )));
+        }
         self.store.publish_to(&installed.id, &self.catalog_root)?;
         self.keys
             .publishers
@@ -111,6 +124,16 @@ impl PackageManager {
             .map_err(|error| PackageError::Install(format!("доверенные ключи: {error}")))?;
         std::fs::write(&self.keys_path, bytes).map_err(PackageError::Io)
     }
+}
+
+fn handshake(installed: &InstalledModule) -> Result<(), String> {
+    let mut process = ModuleProcess::spawn(&installed.entrypoint)
+        .map_err(|error| format!("запуск {}: {error}", installed.entrypoint.display()))?;
+    process
+        .initialize(&installed.id)
+        .map_err(|error| format!("initialize: {error}"))?;
+    process.shutdown();
+    Ok(())
 }
 
 fn parse_key(value: &str) -> Result<[u8; 32], String> {

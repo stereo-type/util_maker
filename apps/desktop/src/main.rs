@@ -471,6 +471,31 @@ impl ShortcutRuntime {
     }
 }
 
+fn shortcut_map_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|directory| directory.join("shortcuts.json"))
+}
+
+fn persisted_shortcut_map(app: &AppHandle) -> BTreeMap<String, String> {
+    shortcut_map_path(app)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_action_shortcut(app: &AppHandle, module_id: &str, action_id: &str, combo: &str) {
+    let Some(path) = shortcut_map_path(app) else {
+        return;
+    };
+    let mut map = persisted_shortcut_map(app);
+    map.insert(format!("{module_id}/{action_id}"), combo.to_owned());
+    if let Ok(bytes) = serde_json::to_vec_pretty(&map) {
+        let _ = std::fs::write(path, bytes);
+    }
+}
+
 fn sync_action_hotkeys(app: &AppHandle) {
     let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
         return;
@@ -479,6 +504,7 @@ fn sync_action_hotkeys(app: &AppHandle) {
         return;
     };
     let actions = state.catalog.registry.actions();
+    let persisted = persisted_shortcut_map(app);
     let existing: BTreeSet<(String, String)> = runtime
         .registrations
         .lock()
@@ -498,19 +524,21 @@ fn sync_action_hotkeys(app: &AppHandle) {
         if existing.contains(&(action.module_id.clone(), action.action_id.clone())) {
             continue;
         }
-        let Some(combo) = state
-            .catalog
-            .registry
-            .module(&action.module_id)
-            .and_then(|entry| {
-                entry
-                    .manifest
-                    .action(&action.action_id)
-                    .and_then(|manifest_action| {
-                        manifest_action.recommended_hotkeys.first().cloned()
-                    })
-            })
-        else {
+        let key = format!("{}/{}", action.module_id, action.action_id);
+        let Some(combo) = persisted.get(&key).cloned().or_else(|| {
+            state
+                .catalog
+                .registry
+                .module(&action.module_id)
+                .and_then(|entry| {
+                    entry
+                        .manifest
+                        .action(&action.action_id)
+                        .and_then(|manifest_action| {
+                            manifest_action.recommended_hotkeys.first().cloned()
+                        })
+                })
+        }) else {
             continue;
         };
         let id = runtime.next_id.fetch_add(1, Ordering::SeqCst);
@@ -1544,6 +1572,7 @@ fn change_action_shortcut(
                     },
                 );
             }
+            save_action_shortcut(&app, &module_id, &action_id, &normalized);
             if module_id == CONTROL_MODULE_ID {
                 *runtime.combo.lock().expect("сочетание") = normalized.clone();
                 runtime.registered.store(true, Ordering::SeqCst);
@@ -1590,6 +1619,7 @@ fn change_control_shortcut(
             drop(service);
             set_shortcut_status(&app, "зарегистрировано");
             save_shortcut(&app, &normalized);
+            save_action_shortcut(&app, CONTROL_MODULE_ID, CONTROL_ACTION_ID, &normalized);
             Ok(normalized)
         }
         Err(error) => {

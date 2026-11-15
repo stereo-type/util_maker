@@ -6,75 +6,56 @@
     <title>Снять область</title>
     <style>
       * { box-sizing: border-box; }
-      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent !important; }
       canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
-      #toolbar {
-        position: fixed; left: 16px; bottom: 16px; z-index: 2;
-        display: flex; gap: 8px; align-items: center;
-        background: #1a2030; color: #e8ecf6; border: 1px solid #2c3550;
-        border-radius: 10px; padding: 8px; font: 13px "Segoe UI", sans-serif;
+      #coords, #hint {
+        position: fixed; z-index: 2; color: #fff; background: rgba(16,20,30,.86);
+        border-radius: 6px; padding: 5px 8px; font: 12.5px "Segoe UI", sans-serif;
+        pointer-events: none; white-space: nowrap;
       }
-      button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #3a4668; background: #232c42; color: inherit; cursor: pointer; }
-      button.active { background: #6b9bff; color: #0b1020; }
-      button:disabled { opacity: .45; cursor: default; }
-      #hint { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 2; color: #fff; background: rgba(16,20,30,.8); padding: 7px 12px; border-radius: 8px; font: 13px "Segoe UI", sans-serif; }
+      #coords { top: 14px; left: 14px; }
+      #hint { top: 14px; left: 50%; transform: translateX(-50%); }
+      #cancel {
+        position: fixed; top: 12px; right: 14px; z-index: 2;
+        font: 13px "Segoe UI", sans-serif; padding: 7px 12px;
+        border-radius: 7px; border: 1px solid #3a4668; background: #232c42; color: #e8ecf6; cursor: pointer;
+      }
     </style>
   </head>
   <body>
     <canvas id="screen"></canvas>
-    <div id="hint">Выделите область мышью. Enter — копировать, Esc — отмена.</div>
-    <div id="toolbar">
-      <button id="select" class="active" type="button">Область</button>
-      <button id="arrow" type="button">Стрелка</button>
-      <button id="rect" type="button">Рамка</button>
-      <button id="undo" type="button" disabled>Отменить</button>
-      <button id="copy" type="button" disabled>Копировать</button>
-      <button id="cancel" type="button">Отмена</button>
-    </div>
+    <div id="coords">0, 0</div>
+    <div id="hint">Перетащите область. Esc — отмена.</div>
+    <button id="cancel" type="button">Отмена</button>
     <script>
       const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
       const canvas = document.getElementById("screen");
-      const context = canvas.getContext("2d", { willReadFrequently: true });
-      let image = null;
-      let selection = null;
-      let annotations = [];
-      let mode = "select";
+      const context = canvas.getContext("2d");
+      const coords = document.getElementById("coords");
+      const dpr = window.devicePixelRatio || 1;
+      let origin = { x: 0, y: 0 };
       let drag = null;
-      let base = null;
+      let selection = null;
+      let opening = false;
+
+      function resize() {
+        canvas.width = Math.max(1, Math.round(window.innerWidth * dpr));
+        canvas.height = Math.max(1, Math.round(window.innerHeight * dpr));
+        draw();
+      }
+      window.addEventListener("resize", resize);
 
       function draw() {
         context.clearRect(0, 0, canvas.width, canvas.height);
-        if (image) context.drawImage(image, 0, 0);
-        if (selection) {
-          context.save();
-          context.fillStyle = "rgba(0,0,0,0.45)";
-          context.fillRect(0, 0, canvas.width, canvas.height);
-          context.clearRect(selection.x, selection.y, selection.w, selection.h);
-          context.drawImage(image, selection.x * (image.width / canvas.width), selection.y * (image.height / canvas.height),
-            selection.w * (image.width / canvas.width), selection.h * (image.height / canvas.height),
-            selection.x, selection.y, selection.w, selection.h);
-          context.strokeStyle = "#6b9bff";
-          context.lineWidth = 2;
-          context.strokeRect(selection.x, selection.y, selection.w, selection.h);
-          context.restore();
-        }
-        for (const annotation of annotations) {
-          context.strokeStyle = "#ff4d4d";
-          context.lineWidth = 3;
-          context.beginPath();
-          if (annotation.type === "arrow") {
-            context.moveTo(annotation.x1, annotation.y1);
-            context.lineTo(annotation.x2, annotation.y2);
-            const angle = Math.atan2(annotation.y2 - annotation.y1, annotation.x2 - annotation.x1);
-            for (const offset of [Math.PI / 7, -Math.PI / 7]) {
-              context.moveTo(annotation.x2, annotation.y2);
-              context.lineTo(annotation.x2 - 14 * Math.cos(angle + offset), annotation.y2 - 14 * Math.sin(angle + offset));
-            }
-          } else {
-            context.rect(annotation.x1, annotation.y1, annotation.x2 - annotation.x1, annotation.y2 - annotation.y1);
-          }
-          context.stroke();
-        }
+        if (!selection) return;
+        context.save();
+        context.strokeStyle = "#4f8cff";
+        context.lineWidth = Math.max(2, Math.round(2 * dpr));
+        context.setLineDash([]);
+        context.strokeRect(selection.x, selection.y, selection.w, selection.h);
+        context.fillStyle = "rgba(79,140,255,.08)";
+        context.fillRect(selection.x, selection.y, selection.w, selection.h);
+        context.restore();
       }
 
       function point(event) {
@@ -86,107 +67,61 @@
       }
 
       canvas.addEventListener("mousedown", (event) => {
+        if (event.button !== 0 || opening) return;
         const p = point(event);
-        if (mode === "select") {
-          selection = { x: p.x, y: p.y, w: 0, h: 0 };
-          drag = { kind: "select", x: p.x, y: p.y };
-        } else {
-          drag = { kind: mode, x1: p.x, y1: p.y, x2: p.x, y2: p.y };
-        }
+        drag = { x: p.x, y: p.y };
+        selection = { x: p.x, y: p.y, w: 0, h: 0 };
         draw();
       });
       canvas.addEventListener("mousemove", (event) => {
-        if (!drag) return;
         const p = point(event);
-        if (drag.kind === "select") {
-          selection = { x: Math.min(drag.x, p.x), y: Math.min(drag.y, p.y), w: Math.abs(p.x - drag.x), h: Math.abs(p.y - drag.y) };
-        } else {
-          drag.x2 = p.x; drag.y2 = p.y;
-        }
+        coords.textContent = `${Math.round(origin.x + p.x)}, ${Math.round(origin.y + p.y)}`;
+        if (!drag) return;
+        selection = {
+          x: Math.min(drag.x, p.x), y: Math.min(drag.y, p.y),
+          w: Math.abs(p.x - drag.x), h: Math.abs(p.y - drag.y),
+        };
         draw();
       });
       canvas.addEventListener("mouseup", () => {
-        if (!drag) return;
-        if (drag.kind !== "select" && (Math.abs(drag.x2 - drag.x1) > 2 || Math.abs(drag.y2 - drag.y1) > 2)) {
-          annotations.push({ type: drag.kind, x1: drag.x1, y1: drag.y1, x2: drag.x2, y2: drag.y2 });
-        }
+        if (!drag || !selection) return;
         drag = null;
-        document.getElementById("copy").disabled = !selection || selection.w < 1 || selection.h < 1;
-        document.getElementById("undo").disabled = annotations.length === 0;
-        draw();
-      });
-
-      function setMode(next) {
-        mode = next;
-        for (const id of ["select", "arrow", "rect"]) document.getElementById(id).classList.toggle("active", id === next);
-      }
-      document.getElementById("select").onclick = () => setMode("select");
-      document.getElementById("arrow").onclick = () => setMode("arrow");
-      document.getElementById("rect").onclick = () => setMode("rect");
-      document.getElementById("undo").onclick = () => { annotations.pop(); document.getElementById("undo").disabled = annotations.length === 0; draw(); };
-      document.getElementById("cancel").onclick = () => invoke("close_overlay");
-      document.getElementById("copy").onclick = copySelection;
-
-      async function copySelection() {
-        if (!selection || !image) return;
-        const sx = selection.x * (image.width / canvas.width);
-        const sy = selection.y * (image.height / canvas.height);
-        const sw = Math.max(1, Math.round(selection.w * (image.width / canvas.width)));
-        const sh = Math.max(1, Math.round(selection.h * (image.height / canvas.height)));
-        const output = document.createElement("canvas");
-        output.width = sw; output.height = sh;
-        const target = output.getContext("2d", { willReadFrequently: true });
-        target.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
-        for (const annotation of annotations) {
-          const x1 = (annotation.x1 - selection.x) * (image.width / canvas.width);
-          const y1 = (annotation.y1 - selection.y) * (image.height / canvas.height);
-          const x2 = (annotation.x2 - selection.x) * (image.width / canvas.width);
-          const y2 = (annotation.y2 - selection.y) * (image.height / canvas.height);
-          target.strokeStyle = "#ff4d4d"; target.lineWidth = 3; target.beginPath();
-          if (annotation.type === "arrow") {
-            target.moveTo(x1, y1); target.lineTo(x2, y2);
-          } else {
-            target.rect(x1, y1, x2 - x1, y2 - y1);
-          }
-          target.stroke();
+        if (selection.w < 3 * dpr || selection.h < 3 * dpr) {
+          selection = null;
+          draw();
+          return;
         }
-        const data = target.getImageData(0, 0, sw, sh).data;
-        let hex = "";
-        for (const value of data) hex += value.toString(16).padStart(2, "0");
-        await invoke("copy_overlay_image", { width: sw, height: sh, rgba: hex });
-        await invoke("close_overlay");
-      }
+        opening = true;
+        const args = {
+          x: Math.round(selection.x), y: Math.round(selection.y),
+          width: Math.max(1, Math.round(selection.w)), height: Math.max(1, Math.round(selection.h)),
+        };
+        invoke("open_screenshot_editor", args).catch((error) => {
+          opening = false;
+          selection = null;
+          document.getElementById("hint").textContent = `Не удалось открыть редактор: ${error}`;
+          draw();
+        });
+      });
+      canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
+      function cancel() { invoke("close_overlay"); }
+      document.getElementById("cancel").addEventListener("click", cancel);
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") invoke("close_overlay");
-        if (event.key === "Enter") copySelection();
+        if (event.key === "Escape") cancel();
+        if (event.key === "Enter" && selection) {
+          const args = { x: Math.round(selection.x), y: Math.round(selection.y), width: Math.round(selection.w), height: Math.round(selection.h) };
+          invoke("open_screenshot_editor", args);
+        }
       });
 
       (async () => {
-        const frame = await invoke("get_overlay_frame");
-        canvas.width = frame.width;
-        canvas.height = frame.height;
-        const bytes = Uint8ClampedArray.from({ length: frame.data.length / 2 }, (_, index) =>
-          parseInt(frame.data.slice(index * 2, index * 2 + 2), 16));
-        const imageData = context.createImageData(frame.width, frame.height);
-        for (let index = 0, offset = 0; index < bytes.length; index += 4, offset += 4) {
-          imageData.data[offset] = bytes[index + 2];
-          imageData.data[offset + 1] = bytes[index + 1];
-          imageData.data[offset + 2] = bytes[index];
-          imageData.data[offset + 3] = 255;
-        }
-        context.putImageData(imageData, 0, 0);
-        base = imageData;
-        image = await createImageBitmap(outputCanvas(imageData));
-        draw();
+        try {
+          origin = await invoke("get_overlay_geometry");
+        } catch (_) {}
+        resize();
+        window.focus();
       })();
-
-      function outputCanvas(data) {
-        const raw = document.createElement("canvas");
-        raw.width = data.width; raw.height = data.height;
-        raw.getContext("2d").putImageData(data, 0, 0);
-        return raw;
-      }
     </script>
   </body>
 </html>

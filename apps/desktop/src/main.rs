@@ -62,6 +62,8 @@ struct AppState {
 }
 
 struct OverlayFrame {
+    origin_x: i32,
+    origin_y: i32,
     width: u32,
     height: u32,
     data: Vec<u8>,
@@ -683,6 +685,8 @@ fn main() {
             close_result,
             copy_text,
             get_overlay_frame,
+            get_overlay_geometry,
+            open_screenshot_editor,
             copy_overlay_image,
             close_overlay,
             get_autostart,
@@ -1110,6 +1114,20 @@ fn action_name_for(app: &AppHandle, target: &ActionRef) -> String {
         .unwrap_or_else(|| target.action_id.clone())
 }
 
+fn hide_and_close(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.hide();
+    }
+    let app = app.clone();
+    let label = label.to_owned();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.close();
+        }
+    });
+}
+
 fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
     let screen = screen_service();
     let geometry = screen.geometry().map_err(|error| error.message)?;
@@ -1125,6 +1143,8 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
     }
     if let Some(state) = app.try_state::<AppState>() {
         *state.overlay.lock().map_err(|error| error.to_string())? = Some(OverlayFrame {
+            origin_x: rect.x,
+            origin_y: rect.y,
             width: rect.width,
             height: rect.height,
             data,
@@ -1139,6 +1159,9 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
+        .transparent(true)
+        .shadow(false)
+        .focused(true)
         .visible(false)
         .build()
         .map_err(|error| format!("overlay: {error}"))?;
@@ -1148,8 +1171,127 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
     window
         .set_size(PhysicalSize::new(rect.width, rect.height))
         .map_err(|error| format!("overlay size: {error}"))?;
+    let _ = window.set_always_on_top(true);
     let _ = window.show();
+    let _ = window.set_focus();
     Ok(())
+}
+
+#[tauri::command]
+fn open_screenshot_editor(
+    app: AppHandle,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let (origin_x, origin_y, frame_width, frame_height) = {
+        let overlay = state.overlay.lock().map_err(|error| error.to_string())?;
+        let frame = overlay
+            .as_ref()
+            .ok_or_else(|| "кадр не захвачен".to_owned())?;
+        (frame.origin_x, frame.origin_y, frame.width, frame.height)
+    };
+    if width < 3 || height < 3 || x < 0 || y < 0 {
+        return Err("слишком маленькая область".to_owned());
+    }
+    if x as u32 + width > frame_width || y as u32 + height > frame_height {
+        return Err("область выходит за пределы экрана".to_owned());
+    }
+    let app_for_editor = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if let Some(window) = app_for_editor.get_webview_window("overlay") {
+            let _ = window.hide();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if let Some(window) = app_for_editor.get_webview_window("overlay") {
+            let _ = window.close();
+        }
+        if let Some(window) = app_for_editor.get_webview_window("editor") {
+            let _ = window.close();
+        }
+        if let Err(error) = show_editor_window(
+            &app_for_editor,
+            x,
+            y,
+            width,
+            height,
+            origin_x,
+            origin_y,
+            frame_width,
+            frame_height,
+        ) {
+            logging::write(&format!("редактор снимка: {error}"));
+        }
+    });
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn show_editor_window(
+    app: &AppHandle,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    origin_x: i32,
+    origin_y: i32,
+    frame_width: u32,
+    frame_height: u32,
+) -> Result<(), String> {
+    let editor_width = width.max(360);
+    let editor_height = height.saturating_add(74);
+    let screen_right = origin_x + frame_width as i32;
+    let screen_bottom = origin_y + frame_height as i32;
+    let window_x = (origin_x + x)
+        .min(screen_right - editor_width as i32)
+        .max(origin_x);
+    let window_y = (origin_y + y)
+        .min(screen_bottom - editor_height as i32)
+        .max(origin_y);
+    let window = WebviewWindowBuilder::new(
+        app,
+        "editor",
+        WebviewUrl::App(format!("editor.html?x={x}&y={y}&w={width}&h={height}").into()),
+    )
+    .title("Редактировать снимок")
+    .decorations(true)
+    .always_on_top(true)
+    .resizable(false)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("редактор: {error}"))?;
+    window
+        .set_position(PhysicalPosition::new(window_x, window_y))
+        .map_err(|error| format!("редактор position: {error}"))?;
+    window
+        .set_size(PhysicalSize::new(editor_width, editor_height))
+        .map_err(|error| format!("редактор size: {error}"))?;
+    let _ = window.set_always_on_top(true);
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_overlay_geometry(app: AppHandle) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let overlay = state.overlay.lock().map_err(|error| error.to_string())?;
+    let frame = overlay
+        .as_ref()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    Ok(serde_json::json!({
+        "x": frame.origin_x,
+        "y": frame.origin_y,
+        "width": frame.width,
+        "height": frame.height,
+    }))
 }
 
 fn invoke_action(
@@ -2339,8 +2481,8 @@ fn copy_overlay_image(width: u32, height: u32, rgba: String) -> Result<(), Strin
 
 #[tauri::command]
 fn close_overlay(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("overlay") {
-        let _ = window.close();
+    for label in ["overlay", "editor"] {
+        hide_and_close(&app, label);
     }
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut overlay) = state.overlay.lock() {

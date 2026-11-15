@@ -4514,7 +4514,7 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "util-maker-color-picker"
-version = "0.4.11"
+version = "0.4.24"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
@@ -4616,7 +4616,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-qr-code"
-version = "0.4.11"
+version = "0.4.24"
 dependencies = [
  "qrcodegen",
  "rqrr",
@@ -4625,7 +4625,7 @@ dependencies = [
 
 [[package]]
 name = "util-maker-screen-ocr"
-version = "0.4.11"
+version = "0.4.24"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",

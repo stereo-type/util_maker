@@ -57,7 +57,7 @@ help:
 		'make screenshot-check  — процесс, редактор и манифест плагина «Скриншоты»' \
 		'make color-picker-check  — выборка, лупа, копирование и граница процесса пипетки' \
 		'make color-picker-reference  — пересоздать эталон пипетки' \
-		'make screen-ocr-check  — обрезка, Tesseract и эталон OCR' \
+		'make screen-ocr-check  — обрезка, Tesseract, эталон и процесс OCR' \
 		'make screen-ocr-reference  — пересоздать эталон OCR' \
 		'make qr-code-check  — кодирование, отрисовка и независимое чтение QR' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
@@ -107,6 +107,7 @@ bump-version:
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/control/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screenshot/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/translator/manifest.json
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screen-ocr/manifest.json
 	@sed -i 's/Util Maker — прототип [0-9][0-9.]*/Util Maker — прототип $(VERSION)/' installer/README.txt
 	@echo "Версия $(VERSION) записана в Cargo.toml, tauri.conf.json и установщик. Проверьте make check-version."
 
@@ -125,7 +126,7 @@ check-version:
 		echo "Версия Cargo.toml ($$cargo_version) не совпадает с tauri.conf.json ($(VERSION))"; \
 		exit 1; \
 	fi; \
-	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json; do \
+	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json plugins/screen-ocr/manifest.json; do \
 		manifest_version=$$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "$$manifest" | head -n 1); \
 		if [ "$$manifest_version" != "$$cargo_version" ]; then \
 			echo "Версия $$manifest ($$manifest_version) не совпадает с Cargo.toml ($$cargo_version)"; \
@@ -149,7 +150,7 @@ color-picker-reference:
 	python3 scripts/make-color-picker-reference.py
 
 screen-ocr-check: dev-image
-	$(dev_container) "$(DEV_IMAGE)" sh -ec "UTIL_MAKER_REQUIRE_TESSERACT=1 cargo test -p util-maker-screen-ocr"
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && UTIL_MAKER_REQUIRE_TESSERACT=1 cargo test -p util-maker-screen-ocr && cargo test -p util-maker-core --test screen_ocr_module"
 
 screen-ocr-reference: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "python3 scripts/make-screen-ocr-reference.py"

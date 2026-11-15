@@ -6,9 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 description = "Текст с экрана: обрезка BGRA8 и локальное распознавание Tesseract"
 
+[[bin]]
+name = "screen-ocr-module"
+path = "src/main.rs"
+
 [dependencies]
+serde_json.workspace = true
 thiserror.workspace = true
 util-maker-sdk.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

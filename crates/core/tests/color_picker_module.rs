@@ -46,6 +46,7 @@ impl PickerHost {
                 origin: FrameOrigin { x: -2, y: 5 },
                 scale_factor: 1.0,
                 expires_in_ms: 5_000,
+                pixel_path: None,
                 geometry: Some(ScreenGeometry {
                     virtual_screen: FrameRegion {
                         x: -2,

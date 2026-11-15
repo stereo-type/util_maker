@@ -807,9 +807,6 @@ fn bootstrap_bundled_packages(app: &AppHandle) -> Result<(), String> {
         .app_local_data_dir()
         .map_err(|error| error.to_string())?;
     let marker = data_directory.join("bundled-packages-v1");
-    if marker.exists() {
-        return Ok(());
-    }
     let key_path = directory.join("org.utilmaker-public.json");
     let key: BundledPublicKey = serde_json::from_slice(
         &std::fs::read(&key_path).map_err(|error| format!("ключ поставки: {error}"))?,
@@ -819,14 +816,30 @@ fn bootstrap_bundled_packages(app: &AppHandle) -> Result<(), String> {
         .try_state::<AppState>()
         .ok_or_else(|| "каталог модулей не готов".to_owned())?;
     let mut manager = state.packages.lock().map_err(|error| error.to_string())?;
-    let mut installed = Vec::new();
+    let mut latest: BTreeMap<String, (semver::Version, std::path::PathBuf)> = BTreeMap::new();
     for entry in std::fs::read_dir(&directory).map_err(|error| error.to_string())? {
         let path = entry.map_err(|error| error.to_string())?.path();
         if path.extension().and_then(|value| value.to_str()) != Some("umpkg") {
             continue;
         }
+        match manager.preview(&path, &key.publisher, &key.public_key) {
+            Ok(preview) => {
+                let version = semver::Version::parse(&preview.version)
+                    .map_err(|error| format!("версия {}: {error}", preview.version))?;
+                let replace = latest
+                    .get(&preview.id)
+                    .is_none_or(|(current, _)| version > *current);
+                if replace {
+                    latest.insert(preview.id, (version, path));
+                }
+            }
+            Err(error) => logging::write(&format!("пакет поставки {}: {error}", path.display())),
+        }
+    }
+    let mut installed = Vec::new();
+    for (_, (_, path)) in latest {
         match manager.install(&path, &key.publisher, &key.public_key) {
-            Ok(module) => installed.push(module.id),
+            Ok(module) => installed.push(format!("{} {}", module.id, module.version)),
             Err(error) => logging::write(&format!("пакет поставки {}: {error}", path.display())),
         }
     }
@@ -1585,6 +1598,9 @@ fn rollback_package(app: AppHandle, plugin_id: String) -> Result<String, String>
 
 #[tauri::command]
 fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
+    if plugin_id == CONTROL_MODULE_ID {
+        return Err("контрольный модуль входит в ядро и не удаляется".to_owned());
+    }
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "менеджер пакетов не готов".to_owned())?;

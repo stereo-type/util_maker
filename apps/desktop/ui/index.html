@@ -618,11 +618,18 @@
         rollback.type = "button";
         rollback.textContent = "Откатить версию";
         rollback.addEventListener("click", () => rollbackCurrentPlugin(plugin));
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.textContent = "Удалить пакет";
-        remove.addEventListener("click", () => removeCurrentPlugin(plugin));
-        packageActions.append(rollback, remove);
+        if (plugin.id !== "org.utilmaker.control") {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "Удалить пакет";
+          remove.addEventListener("click", () => removeCurrentPlugin(plugin));
+          packageActions.append(rollback, remove);
+        } else {
+          const note = document.createElement("p");
+          note.className = "hint";
+          note.textContent = "Контрольный модуль входит в ядро и не удаляется.";
+          packageActions.append(rollback, note);
+        }
         elements.actions.append(packageActions);
       }
 

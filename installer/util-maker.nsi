@@ -19,7 +19,7 @@ Unicode true
 !include "MUI2.nsh"
 
 !ifndef VERSION
-    !define VERSION "0.4.9"
+    !define VERSION "0.4.10"
 !endif
 !ifndef BUILD_KIND
     !define BUILD_KIND "dev"

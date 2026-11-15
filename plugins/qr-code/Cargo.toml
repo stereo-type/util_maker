@@ -1,0 +1,14 @@
+[package]
+name = "util-maker-qr-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "QR-коды: кодирование текста и отрисовка матрицы в физических пикселях"
+
+[dependencies]
+qrcodegen = "1.8"
+thiserror.workspace = true
+
+[dev-dependencies]
+rqrr = "0.11"

@@ -8,6 +8,10 @@ node --version
 npm --version
 tsc --version
 tauri --version
+tesseract --version
+tesseract --list-langs | grep -qx rus
+tesseract --list-langs | grep -qx eng
+python3 -c 'import PIL'
 pkg-config --modversion webkit2gtk-4.1 ayatana-appindicator3-0.1 librsvg-2.0 openssl
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT

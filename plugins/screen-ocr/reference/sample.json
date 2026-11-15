@@ -1,0 +1,86 @@
+{
+  "format": "bgra8",
+  "image": {
+    "width": 600,
+    "height": 340,
+    "png": "sample.png",
+    "pgm": "sample.pgm"
+  },
+  "frame": {
+    "origin": {
+      "x": -120,
+      "y": -80
+    },
+    "width": 600,
+    "height": 340,
+    "stride": 2424
+  },
+  "selection": {
+    "x": 40,
+    "y": 10,
+    "width": 520,
+    "height": 180
+  },
+  "lines": [
+    {
+      "text": "Ошибка 404",
+      "rect": {
+        "x": 40,
+        "y": 26,
+        "width": 231,
+        "height": 28
+      }
+    },
+    {
+      "text": "File missing",
+      "rect": {
+        "x": 40,
+        "y": 127,
+        "width": 210,
+        "height": 34
+      }
+    },
+    {
+      "text": "лишнее",
+      "rect": {
+        "x": 40,
+        "y": 234,
+        "width": 147,
+        "height": 20
+      }
+    }
+  ],
+  "crops": {
+    "russian": {
+      "x": 20,
+      "y": 5,
+      "width": 500,
+      "height": 80
+    },
+    "english": {
+      "x": 20,
+      "y": 105,
+      "width": 500,
+      "height": 80
+    },
+    "empty": {
+      "x": 450,
+      "y": 10,
+      "width": 110,
+      "height": 110
+    }
+  },
+  "expected": {
+    "russianEnglish": [
+      "Ошибка 404",
+      "File missing"
+    ],
+    "russian": [
+      "Ошибка 404"
+    ],
+    "english": [
+      "File missing"
+    ],
+    "outside": "лишнее"
+  }
+}

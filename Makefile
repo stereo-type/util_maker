@@ -37,7 +37,8 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check task-summary \
-	version check-version bump-version build-windows-rise icons screenshot-check control-samples example-package package-export package-install windows-image build-windows
+	version check-version bump-version build-windows-rise icons screenshot-check color-picker-check color-picker-reference screen-ocr-check screen-ocr-reference qr-code-check \
+	control-samples example-package package-export package-install windows-image build-windows
 
 help:
 	@printf '%s\n' 'make dev-setup  — подготовить и проверить окружение Ubuntu-агента' \
@@ -54,6 +55,11 @@ help:
 		'make build-windows-rise  — поднять patch-версию и сразу собрать установщик' \
 		'make icons  — пересоздать иконки приложения' \
 		'make screenshot-check  — процесс, редактор и манифест плагина «Скриншоты»' \
+		'make color-picker-check  — выборка пикселя, форматы и эталон пипетки' \
+		'make color-picker-reference  — пересоздать эталон пипетки' \
+		'make screen-ocr-check  — обрезка, Tesseract и эталон OCR' \
+		'make screen-ocr-reference  — пересоздать эталон OCR' \
+		'make qr-code-check  — кодирование, отрисовка и независимое чтение QR' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
 		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
@@ -135,6 +141,21 @@ icons:
 
 screenshot-check: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-screenshots && cargo test -p util-maker-core --test screenshot_module"
+
+color-picker-check: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo test -p util-maker-color-picker"
+
+color-picker-reference:
+	python3 scripts/make-color-picker-reference.py
+
+screen-ocr-check: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "UTIL_MAKER_REQUIRE_TESSERACT=1 cargo test -p util-maker-screen-ocr"
+
+screen-ocr-reference: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "python3 scripts/make-screen-ocr-reference.py"
+
+qr-code-check: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo test -p util-maker-qr-code"
 
 control-samples: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "CONTROL_SAMPLES_DIR='$(CONTROL_SAMPLES_DIR)' CONTROL_SAMPLE_VERSIONS='$(CONTROL_SAMPLE_VERSIONS)' CONTROL_SAMPLE_PLATFORM='$(CONTROL_SAMPLE_PLATFORM)' sh /workspace/scripts/make-control-samples.sh"

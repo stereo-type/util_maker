@@ -2,7 +2,7 @@
 """Генерирует иконки прототипа без внешних зависимостей.
 
 Запуск: python3 scripts/make-icons.py
-Создаёт apps/desktop/icons/32x32.png, 128x128.png и icon.ico (32 и 256 px).
+Создаёт иконки приложения и состояния трея: работа, пауза, ошибка.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 ICONS = ROOT / "apps" / "desktop" / "icons"
 
 BLUE = (47, 111, 237)
+GREEN = (46, 160, 67)
+YELLOW = (224, 158, 28)
+RED = (200, 52, 52)
 WHITE = (255, 255, 255)
 SUPERSAMPLE = 3
 
@@ -151,9 +154,9 @@ def main() -> None:
         (ICONS / f"{size}x{size}.png").write_bytes(png(size))
     images = [(32, png(32)), (256, png(256))]
     (ICONS / "icon.ico").write_bytes(ico(images))
-    (ICONS / "status-active.png").write_bytes(png(32))
-    (ICONS / "status-paused.png").write_bytes(png(32, (224, 158, 28), "pause"))
-    (ICONS / "status-error.png").write_bytes(png(32, (200, 52, 52), "error"))
+    (ICONS / "status-active.png").write_bytes(png(32, GREEN))
+    (ICONS / "status-paused.png").write_bytes(png(32, YELLOW, "pause"))
+    (ICONS / "status-error.png").write_bytes(png(32, RED, "error"))
     print(f"готово: {ICONS}")
 
 

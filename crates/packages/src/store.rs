@@ -48,6 +48,33 @@ pub struct PackageStore {
     state: StoreState,
 }
 
+struct StoreLock {
+    path: PathBuf,
+}
+
+impl StoreLock {
+    fn acquire(root: &Path) -> Result<Self, PackageError> {
+        let path = root.join(".update.lock");
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => Ok(Self { path }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(
+                PackageError::Install("обновление профиля уже выполняется".to_owned()),
+            ),
+            Err(error) => Err(PackageError::Io(error)),
+        }
+    }
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 impl PackageStore {
     /// Открывает профиль и читает `installed.json`. Каталог создаётся при необходимости.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, PackageError> {
@@ -107,6 +134,7 @@ impl PackageStore {
 
     /// Переключает активную версию на уже установленную рядом.
     pub fn activate(&mut self, id: &str, version: &str) -> Result<InstalledModule, PackageError> {
+        let _lock = StoreLock::acquire(&self.root)?;
         let target = self.root.join("modules").join(id).join(version);
         let manifest_path = target.join(MANIFEST_ENTRY);
         let bytes = fs::read(&manifest_path).map_err(PackageError::Io)?;
@@ -169,6 +197,7 @@ impl PackageStore {
 
     /// Удаляет активную версию и её историю; повторный вызов безопасен.
     pub fn remove(&mut self, id: &str) -> Result<bool, PackageError> {
+        let _lock = StoreLock::acquire(&self.root)?;
         let Some(active) = self.state.modules.remove(id) else {
             self.state.previous.remove(id);
             self.state.settings.remove(id);
@@ -200,6 +229,7 @@ impl PackageStore {
 
     /// Возвращает предыдущую версию и её метаданные.
     pub fn rollback(&mut self, id: &str) -> Result<InstalledModule, PackageError> {
+        let _lock = StoreLock::acquire(&self.root)?;
         let previous =
             self.state.previous.remove(id).ok_or_else(|| {
                 PackageError::Install(format!("нет предыдущей версии модуля {id}"))
@@ -230,6 +260,7 @@ impl PackageStore {
         platform: &str,
         host_api: &Version,
     ) -> Result<InstalledModule, PackageError> {
+        let _lock = StoreLock::acquire(&self.root)?;
         let verified = verify_path(package, trust, platform, host_api)?;
         let manifest = verified.manifest;
         let preview = verified.preview;
@@ -535,6 +566,19 @@ mod tests {
         let manifest = store.publish_to("com.example.publish", &catalog).unwrap();
         assert!(manifest.is_file());
         assert!(catalog.join("com.example.publish/plugin").is_file());
+    }
+
+    #[test]
+    fn concurrent_update_is_rejected_by_lock() {
+        let (package_path, trust, root) = package("com.example.lock", "com.example", "0.1.0", 12);
+        let profile = root.join("profile");
+        let mut store = PackageStore::open(&profile).unwrap();
+        fs::write(profile.join(".update.lock"), b"locked").unwrap();
+        let error = store
+            .install(&package_path, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap_err();
+        assert!(matches!(error, PackageError::Install(_)));
+        assert!(store.modules().is_empty());
     }
 
     #[test]

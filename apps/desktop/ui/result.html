@@ -32,15 +32,37 @@
       button { font: inherit; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); padding: 7px 14px; cursor: pointer; }
       button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       .actions { margin-top: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
+      .qr-panel { margin-top: 12px; display: grid; gap: 10px; }
+      .qr-label { font-size: 12px; color: var(--muted); }
+      textarea {
+        width: 100%; min-height: 64px; resize: vertical; padding: 9px 10px;
+        border: 1px solid var(--border); border-radius: 8px;
+        background: transparent; color: var(--text); font: inherit; line-height: 1.45;
+      }
+      textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .qr-stage {
+        height: min(48vh, 430px); min-height: 180px;
+        display: grid; place-items: center; padding: 10px;
+        border: 1px solid var(--border); border-radius: 10px; background: #ffffff;
+      }
+      #qr-canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+      .qr-message { min-height: 18px; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+      .qr-message.error { color: var(--error); }
     </style>
   </head>
   <body>
     <main>
       <div class="top">
-        <h1>Результат действия</h1>
+        <h1 id="title">Результат действия</h1>
         <span class="status" id="status">—</span>
       </div>
       <div class="message" id="message">Ожидание результата…</div>
+      <section class="qr-panel" id="qr-panel" hidden>
+        <label class="qr-label" for="qr-text">Текст QR — его можно исправить</label>
+        <textarea id="qr-text" rows="3" spellcheck="false"></textarea>
+        <div class="qr-stage"><canvas id="qr-canvas" aria-label="QR-код"></canvas></div>
+        <div class="qr-message" id="qr-message"></div>
+      </section>
       <div class="meta" id="meta"></div>
       <div class="actions">
         <button id="copy" type="button" hidden>Копировать</button>
@@ -50,6 +72,81 @@
     </main>
     <script>
       const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
+      const qrState = { active: false, text: "", generation: 0, timer: 0 };
+
+      function drawQr(data) {
+        const canvas = document.getElementById("qr-canvas");
+        const width = Math.max(1, Number(data.width) || 1);
+        const height = Math.max(1, Number(data.height) || 1);
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
+        const context = canvas.getContext("2d");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, width, height);
+        if (!data.qr) return;
+        const { scale, offsetX, offsetY, quietZone } = data.qr.layout;
+        const size = data.qr.size;
+        context.fillStyle = "#000000";
+        for (let y = 0; y < size; y += 1) {
+          for (let x = 0; x < size; x += 1) {
+            if (!data.qr.modules[y * size + x]) continue;
+            context.fillRect(
+              offsetX + (quietZone + x) * scale,
+              offsetY + (quietZone + y) * scale,
+              scale,
+              scale,
+            );
+          }
+        }
+      }
+
+      function applyQr(data, replaceText) {
+        qrState.text = data.text || "";
+        const textarea = document.getElementById("qr-text");
+        if (replaceText || document.activeElement !== textarea) {
+          textarea.value = qrState.text;
+        }
+        drawQr(data);
+        const message = document.getElementById("qr-message");
+        message.textContent = data.message || "";
+        message.className = "qr-message" + (data.qr ? "" : " error");
+        document.getElementById("title").textContent = "QR-код";
+      }
+
+      async function requestQr() {
+        if (!qrState.active) return;
+        const canvas = document.getElementById("qr-canvas");
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width < 24 || rect.height < 24) return;
+        const ratio = window.devicePixelRatio || 1;
+        const width = Math.max(120, Math.round(rect.width * ratio));
+        const height = Math.max(120, Math.round(rect.height * ratio));
+        const generation = ++qrState.generation;
+        try {
+          const data = await invoke("encode_qr_text", {
+            text: qrState.text,
+            width,
+            height,
+          });
+          if (generation !== qrState.generation) return;
+          applyQr(data, false);
+        } catch (error) {
+          if (generation !== qrState.generation) return;
+          const message = document.getElementById("qr-message");
+          message.textContent = `Не удалось обновить QR: ${error}`;
+          message.className = "qr-message error";
+        }
+      }
+
+      document.getElementById("qr-text").addEventListener("input", (event) => {
+        qrState.text = event.target.value;
+        window.clearTimeout(qrState.timer);
+        qrState.timer = window.setTimeout(requestQr, 220);
+      });
+      new ResizeObserver(() => {
+        window.clearTimeout(qrState.timer);
+        qrState.timer = window.setTimeout(requestQr, 180);
+      }).observe(document.querySelector(".qr-stage"));
 
       async function refresh() {
         try {
@@ -62,13 +159,26 @@
           const status = document.getElementById("status");
           const progress = result.status === "progress";
           const warning = result.status === "warning";
-          status.textContent = progress ? "Перевод…" : result.status === "ok" ? "Успех" : warning ? "Требует действия" : "Ошибка";
+          status.textContent = progress ? "Выполняется…" : result.status === "ok" ? "Успех" : warning ? "Требует действия" : "Ошибка";
           status.className = "status" + (progress || result.status === "ok" ? "" : warning ? " warning" : " error");
           document.getElementById("meta").textContent =
             `${result.moduleId} · ${result.actionName} · источник: ${result.source} · ` +
             `ядро: ${result.coreElapsedMs} мс · от события до окна: ${result.sinceEventMs} мс`;
+          const qr = result.actionId === "show-qr" && result.data && result.data.input;
+          qrState.active = Boolean(qr);
+          document.getElementById("qr-panel").hidden = !qr;
+          document.getElementById("title").textContent = qr ? "QR-код" : "Результат действия";
+          if (qr) {
+            applyQr(result.data, true);
+            window.setTimeout(requestQr, 0);
+          } else {
+            qrState.generation += 1;
+            document.getElementById("qr-text").value = "";
+            const canvas = document.getElementById("qr-canvas");
+            canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+          }
           const copy = document.getElementById("copy");
-          copy.hidden = result.status !== "ok";
+          copy.hidden = result.status !== "ok" || qr;
           document.getElementById("close").hidden = progress;
           copy.onclick = async () => {
             try {

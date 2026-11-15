@@ -7,6 +7,7 @@
 //! и показывают результат в компактном окне. Настройки создаются по запросу и
 //! уничтожаются при закрытии; без окон процесс остаётся в трее.
 
+mod editor_placement;
 mod logging;
 mod package_manager;
 
@@ -40,8 +41,8 @@ use util_maker_platform::{
     NativeSelection, RegisterFailure, ScreenSource, SettingsStore,
 };
 use util_maker_sdk::{
-    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, Manifest,
-    SettingsSchema,
+    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, FrameRegion,
+    Manifest, MonitorGeometry, SettingsSchema,
 };
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
@@ -67,6 +68,7 @@ struct OverlayFrame {
     origin_y: i32,
     width: u32,
     height: u32,
+    monitors: Vec<MonitorGeometry>,
     data: Vec<u8>,
 }
 
@@ -676,6 +678,8 @@ fn register_shortcut(service: &HotkeyService, combo: &str) -> (bool, String) {
 #[serde(rename_all = "camelCase")]
 struct LastResult {
     message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
     module_id: String,
     action_id: String,
     action_name: String,
@@ -715,6 +719,7 @@ fn main() {
             get_status,
             invoke_control,
             invoke_plugin_action,
+            encode_qr_text,
             refresh_plugins,
             get_last_result,
             open_settings_command,
@@ -1144,29 +1149,72 @@ fn center_on_active_monitor(window: &tauri::WebviewWindow, width: u32, height: u
     }
 }
 
+fn activate_qr_result(app: &AppHandle, target: &ActionRef) -> bool {
+    if target.module_id != "org.utilmaker.qr-code" || target.action_id != "show-qr" {
+        return false;
+    }
+    let is_qr = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state.last_result.lock().ok().map(|slot| {
+                slot.as_ref()
+                    .is_some_and(|result| result.action_id == "show-qr")
+            })
+        })
+        .unwrap_or(false);
+    if !is_qr {
+        return false;
+    }
+    let Some(window) = app.get_webview_window(RESULT_WINDOW) else {
+        return false;
+    };
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
+}
+
 fn show_result(app: &AppHandle, result: LastResult) {
+    let qr = result.action_id == "show-qr";
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut slot) = state.last_result.lock() {
             *slot = Some(result);
         }
     }
     if let Some(window) = app.get_webview_window(RESULT_WINDOW) {
+        if qr {
+            let _ = window.set_title("Util Maker — QR-код");
+            let _ = window.set_resizable(true);
+            let _ = window.set_size(PhysicalSize::new(580, 760));
+        }
         let _ = window.eval("window.__umRefresh && window.__umRefresh()");
         let _ = window.show();
         let _ = window.set_focus();
         return;
     }
-    let builder =
+    let mut builder =
         WebviewWindowBuilder::new(app, RESULT_WINDOW, WebviewUrl::App("result.html".into()))
+            .always_on_top(true);
+    builder = if qr {
+        builder
+            .title("Util Maker — QR-код")
+            .inner_size(580.0, 760.0)
+            .min_inner_size(380.0, 480.0)
+            .resizable(true)
+    } else {
+        builder
             .title("Util Maker — результат")
             .inner_size(520.0, 320.0)
             .min_inner_size(420.0, 260.0)
             .resizable(false)
-            .always_on_top(true)
-            .visible(false);
+            .visible(false)
+    };
     match builder.build() {
         Ok(window) => {
-            center_on_active_monitor(&window, 520, 320);
+            if qr {
+                center_on_active_monitor(&window, 580, 760);
+            } else {
+                center_on_active_monitor(&window, 520, 320);
+            }
             let _ = window.show();
             let _ = window.set_focus();
             logging::write("окно результата открыто");
@@ -1229,6 +1277,7 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
             origin_y: rect.y,
             width: rect.width,
             height: rect.height,
+            monitors: geometry.monitors.clone(),
             data,
         });
     }
@@ -1274,12 +1323,18 @@ fn open_screenshot_editor(
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "кадр не захвачен".to_owned())?;
-    let (origin_x, origin_y, frame_width, frame_height) = {
+    let (origin_x, origin_y, frame_width, frame_height, monitors) = {
         let overlay = state.overlay.lock().map_err(|error| error.to_string())?;
         let frame = overlay
             .as_ref()
             .ok_or_else(|| "кадр не захвачен".to_owned())?;
-        (frame.origin_x, frame.origin_y, frame.width, frame.height)
+        (
+            frame.origin_x,
+            frame.origin_y,
+            frame.width,
+            frame.height,
+            frame.monitors.clone(),
+        )
     };
     if width < 3 || height < 3 || x < 0 || y < 0 {
         return Err("слишком маленькая область".to_owned());
@@ -1310,6 +1365,7 @@ fn open_screenshot_editor(
             origin_y,
             frame_width,
             frame_height,
+            &monitors,
         ) {
             logging::write(&format!("редактор снимка: {error}"));
         }
@@ -1328,14 +1384,21 @@ fn show_editor_window(
     origin_y: i32,
     frame_width: u32,
     frame_height: u32,
+    monitors: &[MonitorGeometry],
 ) -> Result<(), String> {
-    let editor_width = 1100.min(frame_width.saturating_sub(32)).max(640);
-    let editor_height = 760.min(frame_height.saturating_sub(32)).max(480);
-    let screen_right = origin_x + frame_width as i32;
-    let screen_bottom = origin_y + frame_height as i32;
-    let window_x = origin_x + (frame_width as i32 - editor_width as i32) / 2;
-    let window_y = origin_y + (frame_height as i32 - editor_height as i32) / 2;
-    let _ = (screen_right, screen_bottom, x, y);
+    let selection = FrameRegion {
+        x: origin_x.saturating_add(x),
+        y: origin_y.saturating_add(y),
+        width,
+        height,
+    };
+    let frame = FrameRegion {
+        x: origin_x,
+        y: origin_y,
+        width: frame_width,
+        height: frame_height,
+    };
+    let placement = editor_placement::place_editor(selection, monitors, frame);
     let window = WebviewWindowBuilder::new(
         app,
         "editor",
@@ -1349,10 +1412,10 @@ fn show_editor_window(
     .build()
     .map_err(|error| format!("редактор: {error}"))?;
     window
-        .set_position(PhysicalPosition::new(window_x, window_y))
+        .set_position(PhysicalPosition::new(placement.x, placement.y))
         .map_err(|error| format!("редактор position: {error}"))?;
     window
-        .set_size(PhysicalSize::new(editor_width, editor_height))
+        .set_size(PhysicalSize::new(placement.width, placement.height))
         .map_err(|error| format!("редактор size: {error}"))?;
     let _ = window.set_always_on_top(true);
     let _ = window.show();
@@ -1496,6 +1559,24 @@ fn invoke_action(
     selection: Arc<Mutex<NativeSelection>>,
     context: InvocationContext,
 ) -> Result<InvokeOutcome, String> {
+    invoke_action_params(
+        app,
+        target,
+        source,
+        serde_json::Value::Null,
+        selection,
+        context,
+    )
+}
+
+fn invoke_action_params(
+    app: &AppHandle,
+    target: &ActionRef,
+    source: InvocationSource,
+    params: serde_json::Value,
+    selection: Arc<Mutex<NativeSelection>>,
+    context: InvocationContext,
+) -> Result<InvokeOutcome, String> {
     logging::debug(&format!(
         "вызов действия module={} action={} source={}",
         target.module_id,
@@ -1511,9 +1592,10 @@ fn invoke_action(
     state
         .catalog
         .registry
-        .invoke_session(
+        .invoke_session_with_params(
             target,
             context,
+            params,
             INVOKE_TIMEOUT,
             Some(logging::logger()),
             &mut host,
@@ -1528,12 +1610,17 @@ fn outcome_status(outcome: &InvokeOutcome) -> &'static str {
         .and_then(|value| value.get("outcome"))
         .and_then(|value| value.as_str());
     match kind {
-        Some("blocked" | "missing-key" | "awaiting-selection" | "manual-input") => "warning",
+        Some(
+            "blocked" | "missing-key" | "awaiting-selection" | "manual-input" | "invalid-input",
+        ) => "warning",
         _ => "ok",
     }
 }
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
+    if activate_qr_result(app, &target) {
+        return;
+    }
     let (selection, source_ref) = capture_selection_source();
     let context = match source {
         InvocationSource::Hotkey => InvocationContext::hotkey(source_ref),
@@ -1545,6 +1632,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: format!("Не удалось открыть редактор: {error}"),
+                    data: None,
                     module_id: target.module_id,
                     action_id: target.action_id,
                     action_name: "Снять область".to_owned(),
@@ -1563,6 +1651,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
             app,
             LastResult {
                 message: "Перевод…".to_owned(),
+                data: None,
                 module_id: target.module_id.clone(),
                 action_id: target.action_id.clone(),
                 action_name: action_name_for(app, &target),
@@ -1588,6 +1677,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: outcome.message.clone(),
+                    data: outcome.data.clone(),
                     module_id: outcome.module_id.clone(),
                     action_id: outcome.action_id.clone(),
                     action_name: outcome.action_name.clone(),
@@ -1624,6 +1714,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: format!("Не удалось выполнить действие: {error}"),
+                    data: None,
                     module_id: target.module_id.clone(),
                     action_id: target.action_id.clone(),
                     action_name: action_name_for(app, &target),
@@ -2582,6 +2673,7 @@ async fn invoke_target(
         open_screenshot_overlay(app)?;
         return Ok(LastResult {
             message: "Выделите область в открывшемся редакторе.".to_owned(),
+            data: None,
             module_id: target.module_id,
             action_id: target.action_id,
             action_name: "Снять область".to_owned(),
@@ -2607,6 +2699,7 @@ async fn invoke_target(
     .map_err(|error| format!("задача вызова прервана: {error}"))??;
     let last = LastResult {
         message: outcome.message.clone(),
+        data: outcome.data.clone(),
         module_id: outcome.module_id.clone(),
         action_id: outcome.action_id.clone(),
         action_name: outcome.action_name.clone(),
@@ -2636,6 +2729,31 @@ async fn invoke_plugin_action(
     source: Option<String>,
 ) -> Result<LastResult, String> {
     invoke_target(&app, ActionRef::new(module_id, action_id), source).await
+}
+
+#[tauri::command]
+fn encode_qr_text(
+    app: AppHandle,
+    text: String,
+    width: u32,
+    height: u32,
+) -> Result<serde_json::Value, String> {
+    let target = ActionRef::new("org.utilmaker.qr-code", "show-qr");
+    let selection = Arc::new(Mutex::new(selection_service()));
+    let context = InvocationContext::new(InvocationSource::Hotkey);
+    let outcome = invoke_action_params(
+        &app,
+        &target,
+        InvocationSource::Hotkey,
+        serde_json::json!({
+            "manualText": text,
+            "windowWidth": width,
+            "windowHeight": height,
+        }),
+        selection,
+        context,
+    )?;
+    Ok(outcome.data.unwrap_or(serde_json::Value::Null))
 }
 
 #[tauri::command]
@@ -2865,6 +2983,8 @@ fn terminate_module_processes() {
             "control-module.exe",
             "screenshot-plugin.exe",
             "translator-module.exe",
+            "qr-code-module.exe",
+            "color-picker-module.exe",
         ] {
             let _ = std::process::Command::new("taskkill")
                 .args(["/F", "/IM", name])
@@ -2874,7 +2994,13 @@ fn terminate_module_processes() {
     }
     #[cfg(not(windows))]
     {
-        for name in ["control-module", "screenshot-plugin", "translator-module"] {
+        for name in [
+            "control-module",
+            "screenshot-plugin",
+            "translator-module",
+            "qr-code-module",
+            "color-picker-module",
+        ] {
             let _ = std::process::Command::new("pkill")
                 .args(["-f", name])
                 .status();

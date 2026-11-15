@@ -1,0 +1,25 @@
+{
+  "manifestVersion": 1,
+  "id": "org.utilmaker.qr-code",
+  "publisher": "org.utilmaker",
+  "name": "QR-коды",
+  "version": "0.4.30",
+  "hostApi": ">=1.0.0 <2.0.0",
+  "entrypoints": {
+    "windows-x64": "qr-code-module.exe",
+    "linux-x64": "qr-code-module"
+  },
+  "capabilities": ["selection.read", "screen.capture", "clipboard.write"],
+  "actions": [
+    {
+      "id": "show-qr",
+      "name": "Показать QR из текста",
+      "description": "Показать QR из текущего выделения или ввести текст вручную"
+    },
+    {
+      "id": "read-qr-region",
+      "name": "Прочитать QR с экрана",
+      "description": "Выбрать область снимка и прочитать QR локально"
+    }
+  ]
+}

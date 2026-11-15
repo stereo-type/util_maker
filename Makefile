@@ -10,6 +10,8 @@ CONTROL_SAMPLE_PLATFORM ?= linux-x64
 EXAMPLE_PACKAGE_DIR ?= dist/example-plugin
 EXAMPLE_VERSION ?= 0.1.0
 EXAMPLE_PLATFORM ?= linux-x64
+COLOR_PICKER_PACKAGE_DIR ?= dist/color-picker-package
+COLOR_PICKER_PACKAGE_PLATFORM ?= linux-x64
 PACKAGE_SOURCE ?=
 PACKAGE_MANIFEST ?=
 PACKAGE_OUTPUT ?=
@@ -37,7 +39,7 @@ windows_container = docker run --rm --user "$$(id -u):$$(id -g)" \
 	--env UTIL_MAKER_BUILD=$(BUILD_KIND)
 
 .PHONY: help dev-image dev-setup dev-run dev-shell fmt fmt-fix lint test check task-summary \
-	version check-version bump-version build-windows-rise icons screenshot-check color-picker-check color-picker-reference screen-ocr-check screen-ocr-reference qr-code-check qr-code-reference \
+	version check-version bump-version build-windows-rise icons screenshot-check color-picker-check color-picker-reference color-picker-package screen-ocr-check screen-ocr-reference qr-code-check qr-code-reference \
 	control-samples example-package package-export package-install windows-image build-windows
 
 help:
@@ -57,9 +59,10 @@ help:
 		'make screenshot-check  — процесс, редактор и манифест плагина «Скриншоты»' \
 		'make color-picker-check  — выборка, лупа, копирование и граница процесса пипетки' \
 		'make color-picker-reference  — пересоздать эталон пипетки' \
+		'make color-picker-package  — подписанный пакет пипетки и проверка обновления' \
 		'make screen-ocr-check  — обрезка, Tesseract, эталон и процесс OCR' \
 		'make screen-ocr-reference  — пересоздать эталон OCR' \
-		'make qr-code-check  — кодирование, отрисовка, декодирование и эталоны QR' \
+		'make qr-code-check  — кодирование, показ QR, декодирование, эталоны и процесс' \
 		'make qr-code-reference  — пересоздать эталоны QR' \
 		'make control-samples  — два подписанных контрольных .umpkg в dist/control-samples' \
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
@@ -109,6 +112,7 @@ bump-version:
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screenshot/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/translator/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screen-ocr/manifest.json
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/qr-code/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/color-picker/manifest.json
 	@sed -i 's/Util Maker — прототип [0-9][0-9.]*/Util Maker — прототип $(VERSION)/' installer/README.txt
 	@echo "Версия $(VERSION) записана в Cargo.toml, tauri.conf.json и установщик. Проверьте make check-version."
@@ -128,7 +132,7 @@ check-version:
 		echo "Версия Cargo.toml ($$cargo_version) не совпадает с tauri.conf.json ($(VERSION))"; \
 		exit 1; \
 	fi; \
-	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json plugins/screen-ocr/manifest.json plugins/color-picker/manifest.json; do \
+	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json plugins/screen-ocr/manifest.json plugins/qr-code/manifest.json plugins/color-picker/manifest.json; do \
 		manifest_version=$$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "$$manifest" | head -n 1); \
 		if [ "$$manifest_version" != "$$cargo_version" ]; then \
 			echo "Версия $$manifest ($$manifest_version) не совпадает с Cargo.toml ($$cargo_version)"; \
@@ -151,6 +155,9 @@ color-picker-check: dev-image
 color-picker-reference:
 	python3 scripts/make-color-picker-reference.py
 
+color-picker-package: dev-image
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "COLOR_PICKER_PACKAGE_DIR='$(COLOR_PICKER_PACKAGE_DIR)' COLOR_PICKER_PACKAGE_PLATFORM='$(COLOR_PICKER_PACKAGE_PLATFORM)' sh /workspace/scripts/make-color-picker-package.sh"
+
 screen-ocr-check: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && UTIL_MAKER_REQUIRE_TESSERACT=1 cargo test -p util-maker-screen-ocr && cargo test -p util-maker-core --test screen_ocr_module"
 
@@ -158,7 +165,7 @@ screen-ocr-reference: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "python3 scripts/make-screen-ocr-reference.py"
 
 qr-code-check: dev-image
-	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo test -p util-maker-qr-code"
+	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-qr-code && cargo test -p util-maker-core --test qr_code_module"
 
 qr-code-reference: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "python3 scripts/make-qr-code-reference.py"

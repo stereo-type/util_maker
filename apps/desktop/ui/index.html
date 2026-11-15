@@ -478,8 +478,8 @@
             input = document.createElement("input");
             input.type = "password";
             input.className = "hotkey-input";
-            input.placeholder = "Ключ хранится отдельно";
-            input.disabled = true;
+            input.placeholder = "Проверка сохранённого ключа…";
+            input.autocomplete = "new-password";
           } else {
             input = document.createElement("input");
             input.type = field.type === "number" ? "number" : "text";
@@ -490,20 +490,48 @@
           label.append(input);
           form.append(label);
           inputs.set(field.id, { input, field });
+          if (field.type === "secret") {
+            const profile = values.activeProfile || schema.profiles?.[0]?.id || "default";
+            const name = field.secretRef || field.id;
+            invoke("plugin_secret_present", { pluginId: plugin.id, profile, name })
+              .then((present) => {
+                input.placeholder = present ? "Ключ сохранён — введите новый для замены" : "Ключ не задан";
+              })
+              .catch(() => {
+                input.placeholder = "Хранилище секретов недоступно";
+              });
+            input.dataset.profile = profile;
+            input.dataset.secretName = name;
+          }
         }
         const save = document.createElement("button");
         save.type = "button";
         save.className = "primary";
         save.textContent = "Сохранить настройки";
         save.addEventListener("click", async () => {
-          const next = {};
-          for (const [id, { input, field }] of inputs) {
-            if (field.type === "secret") continue;
-            next[id] = field.type === "boolean" ? input.checked
-              : field.type === "number" ? Number(input.value)
-              : input.value;
-          }
           try {
+            const next = {};
+            for (const [id, { input, field }] of inputs) {
+              if (field.type === "secret") {
+                if (input.value) {
+                  await invoke("set_plugin_secret", {
+                    pluginId: plugin.id,
+                    profile: input.dataset.profile || "default",
+                    name: input.dataset.secretName || field.id,
+                    value: input.value,
+                  });
+                  input.value = "";
+                  input.placeholder = "Ключ сохранён";
+                }
+                continue;
+              }
+              if (field.required && !input.value) {
+                throw new Error(`Заполните поле «${field.label}»`);
+              }
+              next[id] = field.type === "boolean" ? input.checked
+                : field.type === "number" ? Number(input.value)
+                : input.value;
+            }
             await invoke("save_plugin_settings", { pluginId: plugin.id, values: next });
             showResult("Настройки сохранены.", "ok");
           } catch (error) {
@@ -513,6 +541,36 @@
         const actions = document.createElement("div");
         actions.className = "actions";
         actions.append(save);
+        for (const command of schema.commands || []) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = command.name;
+          button.title = command.description || "";
+          button.addEventListener("click", async () => {
+            const next = {};
+            for (const [id, { input, field }] of inputs) {
+              if (field.type === "secret") continue;
+              next[id] = field.type === "boolean" ? input.checked
+                : field.type === "number" ? Number(input.value)
+                : input.value;
+            }
+            try {
+              const result = await invoke("invoke_form_command", {
+                pluginId: plugin.id,
+                commandId: command.id,
+                profile: values.activeProfile || null,
+                values: next,
+              });
+              const errors = (result.fieldErrors || [])
+                .map((error) => `${error.fieldId}: ${error.message}`)
+                .join("\n");
+              showResult(errors || result.message || "Команда выполнена.", errors ? "error" : "ok");
+            } catch (error) {
+              showResult(`Команда не выполнена: ${error}`, "error");
+            }
+          });
+          actions.append(button);
+        }
         elements.settings.append(title, form, actions);
       }
 

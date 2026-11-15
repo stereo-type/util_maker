@@ -30,13 +30,17 @@ use util_maker_core::hotkeys::{
     AssignmentRecord, Candidate, CheckResult, Confirmation, HotkeyPlatform, HotkeyRegistry,
     HotkeyStore, Owner, RegistrationError, StoreError,
 };
+use util_maker_core::ipc::ModuleProcess;
 use util_maker_core::{
     ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
 };
 use util_maker_platform::{
     DpapiSecretStore, HotkeyEvent, HotkeyService, RegisterFailure, SecretStore,
 };
-use util_maker_sdk::{protocol::InvocationSource, Action, Manifest, SettingsSchema};
+use util_maker_sdk::{
+    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, Manifest,
+    SettingsSchema,
+};
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
 const CONTROL_ACTION_ID: &str = "ping";
@@ -677,6 +681,9 @@ fn main() {
             plugins,
             plugin_settings,
             save_plugin_settings,
+            invoke_form_command,
+            plugin_secret_present,
+            set_plugin_secret,
             preview_package,
             install_package,
             rollback_package,
@@ -1478,6 +1485,83 @@ fn save_plugin_settings(
     let bytes = serde_json::to_vec_pretty(&values).map_err(|error| error.to_string())?;
     std::fs::write(&temp, bytes).map_err(|error| error.to_string())?;
     std::fs::rename(temp, path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn invoke_form_command(
+    app: AppHandle,
+    plugin_id: String,
+    command_id: String,
+    profile: Option<String>,
+    values: serde_json::Map<String, serde_json::Value>,
+) -> Result<FormCommandResult, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    let entry = state
+        .catalog
+        .registry
+        .module(&plugin_id)
+        .ok_or_else(|| "плагин не установлен".to_owned())?;
+    let mut process = ModuleProcess::spawn(&entry.executable)
+        .map_err(|error| format!("запуск плагина: {error}"))?;
+    process
+        .initialize_with_capabilities(&plugin_id, &entry.manifest.capabilities)
+        .map_err(|error| format!("рукопожатие: {error}"))?;
+    let request = FormCommandRequest {
+        command_id,
+        profile,
+        values: values.into_iter().collect(),
+        secrets: Default::default(),
+    };
+    let result = process
+        .form_command(&request, Duration::from_secs(10))
+        .map_err(|error| error.to_string());
+    process.shutdown();
+    result
+}
+
+fn secret_key(plugin_id: &str, profile: &str, name: &str) -> util_maker_platform::SecretKey {
+    util_maker_platform::SecretKey::new(plugin_id, profile, name)
+}
+
+#[tauri::command]
+fn plugin_secret_present(
+    app: AppHandle,
+    plugin_id: String,
+    profile: String,
+    name: String,
+) -> Result<bool, String> {
+    let directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("secrets");
+    let store = DpapiSecretStore::open(&directory).map_err(|error| error.to_string())?;
+    match store.get(&secret_key(&plugin_id, &profile, &name)) {
+        Ok(_) => Ok(true),
+        Err(util_maker_platform::SecretError::NotFound) => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn set_plugin_secret(
+    app: AppHandle,
+    plugin_id: String,
+    profile: String,
+    name: String,
+    value: String,
+) -> Result<(), String> {
+    let directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("secrets");
+    let mut store = DpapiSecretStore::open(&directory).map_err(|error| error.to_string())?;
+    store
+        .set(&secret_key(&plugin_id, &profile, &name), &value)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

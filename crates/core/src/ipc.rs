@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 use semver::Version;
 use serde_json::{json, Value};
 use util_maker_sdk::{
-    error_codes, CallContext, DeniedHost, HostCall, HostCallContext, HostHandler, InitializeParams,
-    InitializeResult, InvocationSource, InvokeRequest, InvokeResult, RpcError, RpcResponse,
-    HOST_API_VERSION, HOST_CALL_METHOD, INITIALIZE_TIMEOUT, JSONRPC_VERSION, MAX_MESSAGE_BYTES,
-    SHUTDOWN_TIMEOUT,
+    error_codes, CallContext, DeniedHost, FormCommandRequest, FormCommandResult, HostCall,
+    HostCallContext, HostHandler, InitializeParams, InitializeResult, InvocationSource,
+    InvokeRequest, InvokeResult, RpcError, RpcResponse, HOST_API_VERSION, HOST_CALL_METHOD,
+    INITIALIZE_TIMEOUT, JSONRPC_VERSION, MAX_MESSAGE_BYTES, SHUTDOWN_TIMEOUT,
 };
 
 use crate::diagnostics::sanitize;
@@ -198,6 +198,20 @@ impl ModuleProcess {
     }
 
     /// Передаёт действие и ждёт конечный исход.
+    /// Выполняет команду формы настроек; секреты передаются только через
+    /// возможности хоста, а не в этом запросе.
+    pub fn form_command(
+        &mut self,
+        request: &FormCommandRequest,
+        timeout: Duration,
+    ) -> Result<FormCommandResult, CoreError> {
+        let params = serde_json::to_value(request)
+            .map_err(|error| CoreError::Protocol(format!("команда формы: {error}")))?;
+        let value = self.request("command", params, timeout)?;
+        serde_json::from_value(value)
+            .map_err(|error| CoreError::Protocol(format!("ответ команды формы: {error}")))
+    }
+
     pub fn invoke(
         &mut self,
         call_id: &str,

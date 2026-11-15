@@ -1276,10 +1276,13 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
 }
 
 fn action_hotkey(app: &AppHandle, manifest: &Manifest, action: &Action) -> Option<String> {
-    if manifest.id == CONTROL_MODULE_ID && action.id == CONTROL_ACTION_ID {
-        if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
-            if let Ok(combo) = runtime.combo.lock() {
-                return Some(combo.clone());
+    if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
+        if let Ok(registrations) = runtime.registrations.lock() {
+            if let Some(registration) = registrations.values().find(|registration| {
+                registration.target.module_id == manifest.id
+                    && registration.target.action_id == action.id
+            }) {
+                return Some(registration.combo.clone());
             }
         }
     }
@@ -1555,6 +1558,18 @@ fn change_action_shortcut(
     };
     if old_combo.as_deref() == Some(normalized.as_str()) {
         return Ok(normalized);
+    }
+    if let Ok(registrations) = runtime.registrations.lock() {
+        if let Some(owner) = registrations.values().find(|registration| {
+            registration.combo == normalized
+                && !(registration.target.module_id == module_id
+                    && registration.target.action_id == action_id)
+        }) {
+            return Err(format!(
+                "сочетание уже назначено действию {} / {}",
+                owner.target.module_id, owner.target.action_id
+            ));
+        }
     }
     let service = runtime.service.lock().expect("служба сочетаний");
     if old_combo.is_some() {

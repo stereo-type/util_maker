@@ -247,7 +247,7 @@ impl HotkeyDemo {
         let mut registry = HotkeyRegistry::open(DemoStore::default(), DemoPlatform::default())
             .expect("демонстрационный реестр шорткеев");
         for (combo, module, action) in [
-            ("Ctrl+Shift+1", "org.utilmaker.screenshot", "capture-region"),
+            ("Ctrl+Shift+S", "org.utilmaker.screenshot", "capture-region"),
             ("Ctrl+Shift+2", "org.utilmaker.translator", "translate"),
         ] {
             if let Some((module_name, action_name)) = demo_target(module, action) {

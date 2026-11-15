@@ -3270,7 +3270,7 @@ mod tests {
         let translator: &[u8] = include_bytes!("../../../plugins/translator/assets/icon.png");
         for (name, bytes) in [("screenshot", screenshot), ("translator", translator)] {
             let image = Image::from_bytes(bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
-            assert_eq!((image.width(), image.height()), (32, 32), "{name}");
+            assert_eq!((image.width(), image.height()), (128, 128), "{name}");
             assert_ne!(bytes, app_icon, "{name} повторяет логотип приложения");
         }
         assert_ne!(screenshot, translator, "иконки микроприложений совпадают");

@@ -55,7 +55,7 @@ help:
 		'make version  — показать версию и тип сборки' \
 		'make bump-version VERSION=x.y.z  — поднять версию в Cargo.toml, tauri.conf.json и установщике' \
 		'make build-windows-rise  — поднять patch-версию и сразу собрать установщик' \
-		'make icons  — пересоздать иконки приложения и микроприложений' \
+		'make icons  — пересоздать иконки приложения, статусов и микроприложений (Pillow)' \
 		'make screenshot-check  — процесс, редактор и манифест плагина «Скриншоты»' \
 		'make color-picker-check  — выборка, лупа, копирование и граница процесса пипетки' \
 		'make color-picker-reference  — пересоздать эталон пипетки' \
@@ -145,7 +145,6 @@ check: check-version fmt lint test
 
 icons:
 	python3 scripts/make-icons.py
-	python3 scripts/make-plugin-icons.py
 
 screenshot-check: dev-image
 	$(dev_container) "$(DEV_IMAGE)" sh -ec "cargo build --workspace --bins && cargo test -p util-maker-screenshots && cargo test -p util-maker-core --test screenshot_module"

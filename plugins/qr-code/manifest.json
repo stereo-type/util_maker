@@ -9,6 +9,7 @@
     "windows-x64": "qr-code-module.exe",
     "linux-x64": "qr-code-module"
   },
+  "icon": "assets/icon.png",
   "capabilities": ["selection.read", "screen.capture", "clipboard.write"],
   "actions": [
     {

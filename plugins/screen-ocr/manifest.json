@@ -9,6 +9,7 @@
     "windows-x64": "screen-ocr-module.exe",
     "linux-x64": "screen-ocr-module"
   },
+  "icon": "assets/icon.png",
   "capabilities": ["screen.capture", "settings.read", "clipboard.write"],
   "actions": [
     {

@@ -257,6 +257,17 @@
       </section>
     </div>
 
+    <div id="confirm-modal" class="modal-backdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <h2 id="confirm-title">Подтверждение</h2>
+        <p class="hint" id="confirm-message"></p>
+        <div class="actions">
+          <button id="confirm-cancel" type="button">Отмена</button>
+          <button id="confirm-ok" class="primary" type="button">Подтвердить</button>
+        </div>
+      </section>
+    </div>
+
     <script>
       const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
       const elements = {
@@ -285,12 +296,19 @@
         modalTarget: document.getElementById("hotkey-modal-target"),
         input: document.getElementById("hotkey-input"),
         status: document.getElementById("hotkey-status"),
+        confirmModal: document.getElementById("confirm-modal"),
+        confirmTitle: document.getElementById("confirm-title"),
+        confirmMessage: document.getElementById("confirm-message"),
+        confirmOk: document.getElementById("confirm-ok"),
+        confirmCancel: document.getElementById("confirm-cancel"),
       };
       let plugins = [];
       let currentPlugin = null;
       let pluginTrigger = null;
       let hotkeyTarget = null;
       let hotkeyTrigger = null;
+      let confirmResolver = null;
+      let confirmTrigger = null;
 
       function showResult(text, kind) {
         elements.result.textContent = text;
@@ -721,6 +739,28 @@
         hotkeyTrigger = null;
       }
 
+      function closeConfirm(value) {
+        const resolver = confirmResolver;
+        confirmResolver = null;
+        elements.confirmModal.hidden = true;
+        if (confirmTrigger && typeof confirmTrigger.focus === "function") confirmTrigger.focus();
+        confirmTrigger = null;
+        if (resolver) resolver(value);
+      }
+
+      function askConfirm(title, message, label) {
+        if (confirmResolver) closeConfirm(false);
+        return new Promise((resolve) => {
+          confirmResolver = resolve;
+          confirmTrigger = document.activeElement;
+          elements.confirmTitle.textContent = title;
+          elements.confirmMessage.textContent = message;
+          elements.confirmOk.textContent = label || "Подтвердить";
+          elements.confirmModal.hidden = false;
+          elements.confirmCancel.focus();
+        });
+      }
+
       async function saveHotkey() {
         if (!hotkeyTarget) return;
         try {
@@ -734,7 +774,12 @@
           await loadPlugins();
         } catch (error) {
           const message = String(error);
-          if (message.includes("уже назначено") && window.confirm(`${message}\n\nПеренести сочетание?`)) {
+          if (message.includes("уже назначено")) {
+            const confirmed = await askConfirm("Перенести сочетание?", message, "Перенести");
+            if (!confirmed) {
+              setHotkeyStatus(message, "error");
+              return;
+            }
             try {
               await invoke("move_action_shortcut", {
                 moduleId: hotkeyTarget.pluginId,
@@ -799,6 +844,31 @@
           first.focus();
         }
       });
+      elements.confirmOk.addEventListener("click", () => closeConfirm(true));
+      elements.confirmCancel.addEventListener("click", () => closeConfirm(false));
+      elements.confirmModal.addEventListener("click", (event) => {
+        if (event.target === elements.confirmModal) closeConfirm(false);
+      });
+      elements.confirmModal.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeConfirm(false);
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const focusable = elements.confirmModal.querySelectorAll(
+          'button:not([disabled]), input:not([disabled]), [href], select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first.focus();
+        }
+      });
+
       elements.pluginClose.addEventListener("click", closePlugin);
       elements.detail.addEventListener("click", (event) => {
         if (event.target === elements.detail) closePlugin();
@@ -825,7 +895,8 @@
       });
       document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape") return;
-        if (!elements.modal.hidden) closeHotkey();
+        if (!elements.confirmModal.hidden) closeConfirm(false);
+        else if (!elements.modal.hidden) closeHotkey();
         else if (!elements.detail.hidden) closePlugin();
       });
 
@@ -897,7 +968,12 @@
       }
 
       async function removeCurrentPlugin(plugin) {
-        if (!window.confirm(`Удалить пакет ${plugin.name}?`)) return;
+        const confirmed = await askConfirm(
+          "Удалить пакет?",
+          `Пакет ${plugin.name} будет удалён вместе с его действиями и настройками.`,
+          "Удалить",
+        );
+        if (!confirmed) return;
         try {
           await invoke("remove_package", { pluginId: plugin.id });
           closePlugin();

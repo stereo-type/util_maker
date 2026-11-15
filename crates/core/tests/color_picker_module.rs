@@ -64,6 +64,7 @@ impl PickerHost {
                         primary: true,
                     }],
                 }),
+                pixel_path: None,
             },
         }
     }

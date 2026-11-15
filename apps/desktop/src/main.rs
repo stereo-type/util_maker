@@ -866,8 +866,23 @@ fn bootstrap_bundled_packages(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn tray_state_icon(paused: bool) -> Image<'static> {
+    let bytes = if paused {
+        include_bytes!("../icons/tray-paused.png").as_slice()
+    } else {
+        include_bytes!("../icons/tray-working.png").as_slice()
+    };
+    Image::from_bytes(bytes).expect("иконка состояния трея")
+}
+
+fn update_tray_state(app: &AppHandle, paused: bool) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_icon(Some(tray_state_icon(paused)));
+    }
+}
+
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+    let icon = tray_state_icon(false);
 
     TrayIconBuilder::with_id("main")
         .icon(icon)
@@ -1037,6 +1052,7 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
 fn open_settings(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(SETTINGS_WINDOW) {
         let _ = window.unminimize();
+        center_on_active_monitor(&window, 700, 620);
         let _ = window.show();
         let _ = window.set_focus();
         #[cfg(windows)]
@@ -1049,10 +1065,13 @@ fn open_settings(app: &AppHandle) {
         .title("Util Maker — настройки")
         .inner_size(700.0, 620.0)
         .min_inner_size(560.0, 460.0)
-        .center()
+        .visible(false)
         .build()
     {
         Ok(window) => {
+            center_on_active_monitor(&window, 700, 620);
+            let _ = window.show();
+            let _ = window.set_focus();
             logging::write("окно настроек открыто");
             #[cfg(not(windows))]
             let _ = &window;
@@ -1062,6 +1081,29 @@ fn open_settings(app: &AppHandle) {
             }
         }
         Err(error) => logging::write(&format!("не удалось открыть настройки: {error}")),
+    }
+}
+
+fn center_on_active_monitor(window: &tauri::WebviewWindow, width: u32, height: u32) {
+    let cursor = util_maker_platform::cursor_position().unwrap_or((0, 0));
+    let geometry = screen_service().geometry().ok();
+    let rect = geometry.as_ref().and_then(|geometry| {
+        geometry
+            .monitors
+            .iter()
+            .find(|monitor| {
+                cursor.0 >= monitor.rect.x
+                    && cursor.0 < monitor.rect.x + monitor.rect.width as i32
+                    && cursor.1 >= monitor.rect.y
+                    && cursor.1 < monitor.rect.y + monitor.rect.height as i32
+            })
+            .map(|monitor| monitor.rect)
+            .or(Some(geometry.virtual_screen))
+    });
+    if let Some(rect) = rect {
+        let x = rect.x + (rect.width as i32 - width as i32) / 2;
+        let y = rect.y + (rect.height as i32 - height as i32) / 2;
+        let _ = window.set_position(PhysicalPosition::new(x, y));
     }
 }
 
@@ -1077,20 +1119,21 @@ fn show_result(app: &AppHandle, result: LastResult) {
         let _ = window.set_focus();
         return;
     }
-    let mut builder =
+    let builder =
         WebviewWindowBuilder::new(app, RESULT_WINDOW, WebviewUrl::App("result.html".into()))
             .title("Util Maker — результат")
             .inner_size(520.0, 320.0)
             .min_inner_size(420.0, 260.0)
             .resizable(false)
-            .always_on_top(true);
-    if let Some((x, y)) = util_maker_platform::cursor_position() {
-        builder = builder.position(x as f64 + 18.0, y as f64 + 18.0);
-    } else {
-        builder = builder.center();
-    }
+            .always_on_top(true)
+            .visible(false);
     match builder.build() {
-        Ok(_) => logging::write("окно результата открыто"),
+        Ok(window) => {
+            center_on_active_monitor(&window, 520, 320);
+            let _ = window.show();
+            let _ = window.set_focus();
+            logging::write("окно результата открыто");
+        }
         Err(error) => logging::write(&format!("не удалось показать результат: {error}")),
     }
 }
@@ -1629,6 +1672,7 @@ fn toggle_shortcut_pause(app: &AppHandle) {
         } else {
             set_shortcut_status(app, "занято другой программой");
         }
+        update_tray_state(app, false);
     } else {
         // Сначала закрываем обработку событий, затем освобождаем регистрации:
         // иначе уже поставленное в очередь WM_HOTKEY успеет вызвать действие.
@@ -1636,6 +1680,7 @@ fn toggle_shortcut_pause(app: &AppHandle) {
         runtime.unregister_all();
         runtime.registered.store(false, Ordering::SeqCst);
         set_shortcut_status(app, "на паузе");
+        update_tray_state(app, true);
     }
 }
 

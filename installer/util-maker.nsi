@@ -21,7 +21,7 @@ Unicode true
 !include "LogicLib.nsh"
 
 !ifndef VERSION
-    !define VERSION "0.4.24"
+    !define VERSION "0.4.29"
 !endif
 !ifndef BUILD_KIND
     !define BUILD_KIND "dev"
@@ -70,7 +70,6 @@ ShowUninstDetails show
 !define MUI_FINISHPAGE_RUN_TEXT "Запустить Util Maker"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
-Page custom CleanInstallPage CleanInstallLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -78,32 +77,6 @@ Page custom CleanInstallPage CleanInstallLeave
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "Russian"
-
-Var CleanInstallCheck
-Var CleanInstallDialog
-
-Function CleanInstallPage
-    !insertmacro MUI_HEADER_TEXT "Параметры установки" "Выберите, сохранять ли настройки прошлой версии."
-    nsDialogs::Create 1018
-    Pop $CleanInstallDialog
-    ${If} $CleanInstallDialog == error
-        Abort
-    ${EndIf}
-    ${NSD_CreateCheckBox} 0 0 100% 24u "Чистая установка: удалить сочетания, настройки плагинов и установленные пакеты"
-    Pop $CleanInstallCheck
-    ${NSD_SetState} $CleanInstallCheck ${BST_UNCHECKED}
-    ${NSD_CreateLabel} 0 30u 100% 40u "Если галочка не стоит, профиль, сочетания и настройки сохранятся. Журнал и секреты также останутся."
-    Pop $0
-    nsDialogs::Show
-FunctionEnd
-
-Function CleanInstallLeave
-    ${NSD_GetState} $CleanInstallCheck $0
-    StrCmp $0 ${BST_CHECKED} 0 clean_install_done
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION "Удалить все сочетания, настройки и установленные пакеты? Это действие необратимо." IDYES clean_install_done
-    Abort
-    clean_install_done:
-FunctionEnd
 
 Function LaunchUtilMaker
     Exec '"$INSTDIR\util-maker-desktop.exe" --open-settings'
@@ -122,9 +95,8 @@ Section "Util Maker" SEC_MAIN
     Pop $1
     Sleep 400
 
-    StrCmp $CleanInstallCheck "" clean_data_done
-    ${NSD_GetState} $CleanInstallCheck $0
-    StrCmp $0 ${BST_CHECKED} 0 clean_data_done
+    IfSilent clean_data_done
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION "Чистая установка: удалить сочетания, настройки и установленные пакеты?$\r$\nБез этого настройки сохранятся." IDNO clean_data_done
     RMDir /r "$LOCALAPPDATA\org.utilmaker.prototype"
     RMDir /r "$LOCALAPPDATA\Util Maker\logs"
     clean_data_done:
@@ -192,21 +164,23 @@ Section "Uninstall"
     Delete "$SMPROGRAMS\Util Maker\Удалить Util Maker.lnk"
     RMDir "$SMPROGRAMS\Util Maker"
 
+    RMDir /r "$INSTDIR\modules"
+    RMDir /r "$INSTDIR\packages"
+    RMDir /r "$INSTDIR\scripts"
+    RMDir /r "$INSTDIR\logs"
     Delete "$INSTDIR\util-maker-desktop.exe"
     Delete "$INSTDIR\README.txt"
-    Delete "$INSTDIR\modules\org.utilmaker.control\control-module.exe"
-    Delete "$INSTDIR\modules\org.utilmaker.control\manifest.json"
-    Delete "$INSTDIR\modules\org.utilmaker.control\assets\icon.png"
-    RMDir "$INSTDIR\modules\org.utilmaker.control\assets"
-    RMDir "$INSTDIR\modules\org.utilmaker.control"
-    Delete "$INSTDIR\packages\*.umpkg"
-    Delete "$INSTDIR\packages\org.utilmaker-public.json"
-    RMDir "$INSTDIR\packages"
-    Delete "$INSTDIR\scripts\measure-windows.ps1"
-    Delete "$INSTDIR\scripts\kill-plugin.ps1"
-    RMDir "$INSTDIR\scripts"
-    RMDir "$INSTDIR\modules"
     Delete "$INSTDIR\uninstall.exe"
+    ; Сам деинсталлятор запущен из $INSTDIR и не может удалить свой файл.
+    ; Передаём удаление каталога отдельному cmd после выхода процесса.
+    SetOutPath "$TEMP"
+    FileOpen $0 "$TEMP\util-maker-cleanup.bat" w
+    FileWrite $0 "@echo off$\r$\n"
+    FileWrite $0 "timeout /t 2 /nobreak >nul$\r$\n"
+    FileWrite $0 "rmdir /s /q $\"$INSTDIR$\"$\r$\n"
+    FileWrite $0 "del $\"%~f0$\"$\r$\n"
+    FileClose $0
+    Exec '"$TEMP\util-maker-cleanup.bat"' 
     RMDir "$INSTDIR"
 
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "UtilMaker"

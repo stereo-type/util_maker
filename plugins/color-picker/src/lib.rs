@@ -539,6 +539,7 @@ mod tests {
             scale_factor: 1.0,
             expires_in_ms: 5_000,
             geometry: None,
+            pixel_path: None,
         };
         assert_eq!(
             FrameView::from_frame_ref(&frame_ref, &[0, 0, 0, 255]),
@@ -575,6 +576,7 @@ mod tests {
                     primary: true,
                 }],
             }),
+            pixel_path: None,
         };
         let frame = FrameView::from_frame_ref(&frame_ref, &[0xED, 0x80, 0x2F, 0xFF])
             .expect("кадр из FrameRef");
@@ -601,6 +603,7 @@ mod tests {
                 },
                 monitors: vec![],
             }),
+            pixel_path: None,
         };
         assert_eq!(
             FrameView::from_frame_ref(&frame_ref, &[0, 0, 0, 255]),

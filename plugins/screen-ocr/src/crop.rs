@@ -324,6 +324,7 @@ mod tests {
             scale_factor: 1.0,
             expires_in_ms: 5_000,
             geometry: None,
+            pixel_path: None,
         };
         assert_eq!(
             BgraFrame::from_frame_ref(&frame_ref, &[0, 0, 0, 255]),

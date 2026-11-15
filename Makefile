@@ -64,7 +64,7 @@ help:
 		'make example-package  — подписанный пример стороннего плагина в dist/example-plugin' \
 		'make package-export  — подписать подготовленный каталог: PACKAGE_SOURCE, PACKAGE_MANIFEST, PACKAGE_OUTPUT, PACKAGE_PRIVATE_KEY' \
 		'make package-install  — установить .umpkg в профиль: PACKAGE_OUTPUT, PACKAGE_PUBLIC_KEY, PACKAGE_PROFILE, PACKAGE_PLATFORM' \
-		'make build-windows  — собрать NSIS-установщик в dist/ (BUILD_KIND=dev)'
+		'make build-windows  — собрать NSIS-установщик в dist/ (BUILD_KIND=dev; старые установщики того же типа удаляются)'
 
 task-summary:
 	python3 scripts/task-summary.py

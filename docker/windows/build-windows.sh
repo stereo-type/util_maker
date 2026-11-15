@@ -15,8 +15,31 @@ fi
 target_dir="${CARGO_TARGET_DIR:-/workspace/.cache/windows-build/target}"
 export CARGO_TARGET_DIR="$target_dir"
 
+dist_dir=/workspace/dist
+mkdir -p "$dist_dir"
+build_kind=$(printf '%s' "${UTIL_MAKER_BUILD:-dev}" | tr -cd 'A-Za-z0-9._-')
+if [ -z "$build_kind" ]; then
+    build_kind=dev
+fi
+out="$dist_dir/UtilMaker-Setup-$version-$build_kind.exe"
 
-echo "Util Maker $version: сборка x86_64-pc-windows-msvc, тип ${UTIL_MAKER_BUILD:-dev}"
+# Установщики прошлых сборок того же типа больше не нужны: dist иначе копит
+# версии. Маска ограничена типом сборки, поэтому сборка dev не удаляет
+# release/prod, а пакеты, эталоны и прочие файлы в dist остаются на месте.
+removed=0
+for previous in "$dist_dir"/UtilMaker-Setup-*-"$build_kind".exe; do
+    [ -f "$previous" ] || continue
+    rm -f -- "$previous"
+    removed=$((removed + 1))
+    echo "Удалён прежний установщик: ${previous##*/}"
+done
+if [ "$removed" -gt 0 ]; then
+    echo "Очистка dist: удалено установщиков типа $build_kind — $removed."
+else
+    echo "Очистка dist: прежних установщиков типа $build_kind нет."
+fi
+
+echo "Util Maker $version: сборка x86_64-pc-windows-msvc, тип $build_kind"
 cargo xwin build --release --target x86_64-pc-windows-msvc \
     -p util-maker-desktop -p util-maker-control-module -p util-maker-screenshots -p util-maker-translator \
     --bin util-maker-desktop --bin control-module --bin screenshot-plugin --bin translator-module
@@ -36,15 +59,7 @@ for file in "$exe" "$module" "$manifest" "$screenshot_module" "$screenshot_manif
     fi
 done
 
-mkdir -p /workspace/dist
-build_kind=$(printf '%s' "${UTIL_MAKER_BUILD:-dev}" | tr -cd 'A-Za-z0-9._-')
-if [ -z "$build_kind" ]; then
-    build_kind=dev
-fi
-out="/workspace/dist/UtilMaker-Setup-$version-$build_kind.exe"
-rm -f "$out"
-
-package_dir=/workspace/dist/packages
+package_dir="$dist_dir/packages"
 mkdir -p "$package_dir/keys" "$package_dir/staging"
 private_key="$package_dir/keys/org.utilmaker-private.json"
 public_key="$package_dir/keys/org.utilmaker-public.json"

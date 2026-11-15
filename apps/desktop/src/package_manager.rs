@@ -10,8 +10,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use util_maker_core::ipc::ModuleProcess;
 use util_maker_packages::{
-    verify_path, LegacyInstalledModule as InstalledModule, LegacyPackageStore as PackageStore,
-    PackageError, PackagePreview, TrustStore,
+    verify_path, InstalledPackage, PackageError, PackagePreview, PackageStore, TrustStore,
 };
 use util_maker_sdk::HOST_API_VERSION;
 
@@ -78,44 +77,53 @@ impl PackageManager {
         package: &Path,
         publisher: &str,
         key_hex: &str,
-    ) -> Result<InstalledModule, PackageError> {
-        let key = parse_key(key_hex)
-            .map_err(|error| PackageError::Malformed(format!("ключ издателя: {error}")))?;
-        self.trust.add_publisher(publisher, key)?;
+    ) -> Result<InstalledPackage, String> {
+        let key = parse_key(key_hex).map_err(|error| format!("ключ издателя: {error}"))?;
+        self.trust
+            .add_publisher(publisher, key)
+            .map_err(|error| error.to_string())?;
         let installed = self
             .store
-            .install(package, &self.trust, platform(), &host_version())?;
+            .install_path(package, &self.trust, platform(), &host_version())
+            .map_err(|error| error.to_string())?
+            .package;
         if let Err(error) = handshake(&installed) {
             // Кандидат не прошёл рукопожатие: возвращаем предыдущую пару.
             if self.store.rollback(&installed.id).is_err() {
                 let _ = self.store.remove(&installed.id);
             }
-            if let Some(previous) = self.store.module(&installed.id) {
+            if let Some(previous) = self
+                .store
+                .package(&installed.id)
+                .map_err(|error| error.to_string())?
+            {
                 let _ = self.store.publish_to(&previous.id, &self.catalog_root);
             }
-            return Err(PackageError::Install(format!(
-                "кандидат не прошёл рукопожатие: {error}"
-            )));
+            return Err(format!("кандидат не прошёл рукопожатие: {error}"));
         }
-        self.store.publish_to(&installed.id, &self.catalog_root)?;
+        self.store
+            .publish_to(&installed.id, &self.catalog_root)
+            .map_err(|error| error.to_string())?;
         self.keys
             .publishers
             .insert(publisher.to_owned(), key_hex.to_ascii_lowercase());
-        self.save_keys()?;
+        self.save_keys().map_err(|error| error.to_string())?;
         Ok(installed)
     }
 
-    pub fn rollback(&mut self, id: &str) -> Result<InstalledModule, PackageError> {
-        let module = self.store.rollback(id)?;
-        self.store.publish_to(id, &self.catalog_root)?;
+    pub fn rollback(&mut self, id: &str) -> Result<InstalledPackage, String> {
+        let module = self.store.rollback(id).map_err(|error| error.to_string())?;
+        self.store
+            .publish_to(id, &self.catalog_root)
+            .map_err(|error| error.to_string())?;
         Ok(module)
     }
 
-    pub fn remove(&mut self, id: &str) -> Result<bool, PackageError> {
-        let removed = self.store.remove(id)?;
+    pub fn remove(&mut self, id: &str) -> Result<bool, String> {
+        let removed = self.store.remove(id).map_err(|error| error.to_string())?;
         let directory = self.catalog_root.join(id);
         if directory.exists() {
-            std::fs::remove_dir_all(directory).map_err(PackageError::Io)?;
+            std::fs::remove_dir_all(directory).map_err(|error| error.to_string())?;
         }
         Ok(removed)
     }
@@ -127,9 +135,9 @@ impl PackageManager {
     }
 }
 
-fn handshake(installed: &InstalledModule) -> Result<(), String> {
-    let mut process = ModuleProcess::spawn(&installed.entrypoint)
-        .map_err(|error| format!("запуск {}: {error}", installed.entrypoint.display()))?;
+fn handshake(installed: &InstalledPackage) -> Result<(), String> {
+    let mut process = ModuleProcess::spawn(&installed.executable)
+        .map_err(|error| format!("запуск {}: {error}", installed.executable.display()))?;
     process
         .initialize(&installed.id)
         .map_err(|error| format!("initialize: {error}"))?;

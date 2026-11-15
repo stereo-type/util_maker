@@ -7,7 +7,6 @@
 
 pub mod export;
 pub mod install;
-pub mod store;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -25,7 +24,6 @@ pub use export::{
     ensure_key_is_outside_package, export_package, ExportError, ExportOptions, ExportResult,
 };
 pub use install::{InstallError, InstallResult, InstalledPackage, PackageStore};
-pub use store::{InstalledModule as LegacyInstalledModule, PackageStore as LegacyPackageStore};
 
 /// Имя манифеста внутри архива.
 pub const MANIFEST_ENTRY: &str = "manifest.json";

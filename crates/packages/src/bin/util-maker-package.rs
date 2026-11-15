@@ -16,6 +16,9 @@
 //!     --public-key dist/keys/org.utilmaker-public.json --profile PROFILE \
 //!     --platform linux-x64 [--host-api 1.0.0]
 //! util-maker-package list --profile PROFILE
+//! util-maker-package rollback --profile PROFILE --id ID
+//! util-maker-package activate --profile PROFILE --id ID --version VERSION
+//! util-maker-package remove --profile PROFILE --id ID
 //! ```
 //!
 //! Закрытый ключ не печатается. `keygen` создаёт новый файл и не перезаписывает
@@ -73,6 +76,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         "verify" => verify(&flags),
         "install" => install(&flags),
         "list" => list(&flags),
+        "rollback" => rollback(&flags),
+        "activate" => activate(&flags),
+        "remove" => remove(&flags),
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -190,6 +196,36 @@ fn list(flags: &Flags) -> Result<(), Box<dyn Error>> {
     let profile = PathBuf::from(flags.required("profile")?);
     let store = PackageStore::open(&profile)?;
     println!("{}", serde_json::to_string_pretty(&store.installed()?)?);
+    Ok(())
+}
+
+fn rollback(flags: &Flags) -> Result<(), Box<dyn Error>> {
+    let profile = PathBuf::from(flags.required("profile")?);
+    let id = flags.required("id")?;
+    let store = PackageStore::open(&profile)?;
+    let package = store.rollback(id)?;
+    println!("{}", serde_json::to_string_pretty(&package)?);
+    Ok(())
+}
+
+fn activate(flags: &Flags) -> Result<(), Box<dyn Error>> {
+    let profile = PathBuf::from(flags.required("profile")?);
+    let id = flags.required("id")?;
+    let version = flags.required("version")?;
+    let store = PackageStore::open(&profile)?;
+    let package = store.activate(id, version)?;
+    println!("{}", serde_json::to_string_pretty(&package)?);
+    Ok(())
+}
+
+fn remove(flags: &Flags) -> Result<(), Box<dyn Error>> {
+    let profile = PathBuf::from(flags.required("profile")?);
+    let id = flags.required("id")?;
+    let store = PackageStore::open(&profile)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({"removed": store.remove(id)?}))?
+    );
     Ok(())
 }
 

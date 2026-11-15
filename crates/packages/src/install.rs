@@ -309,6 +309,102 @@ impl PackageStore {
         Ok(true)
     }
 
+    /// Все установленные версии пакета, отсортированные по semver.
+    pub fn versions(&self, id: &str) -> Result<Vec<String>, InstallError> {
+        let index = self.load_index()?;
+        let record = index
+            .packages
+            .get(id)
+            .ok_or_else(|| InstallError::State(format!("пакет {id} не установлен в профиле")))?;
+        let mut versions: Vec<Version> = record
+            .versions
+            .keys()
+            .filter_map(|value| Version::parse(value).ok())
+            .collect();
+        versions.sort();
+        Ok(versions
+            .into_iter()
+            .map(|version| version.to_string())
+            .collect())
+    }
+
+    /// Переключает активную версию на уже установленную.
+    pub fn activate(&self, id: &str, version: &str) -> Result<InstalledPackage, InstallError> {
+        let _guard = self.lock.lock().expect("блокировка установки");
+        let mut index = self.load_index()?;
+        let record = index
+            .packages
+            .get_mut(id)
+            .ok_or_else(|| InstallError::State(format!("пакет {id} не установлен в профиле")))?;
+        if !record.versions.contains_key(version) {
+            return Err(InstallError::State(format!(
+                "версия {version} пакета {id} не установлена"
+            )));
+        }
+        record.active_version = version.to_owned();
+        self.write_index(&index)?;
+        let record = index.packages.get(id).expect("запись после активации");
+        self.read_version(record, version)
+    }
+
+    /// Откатывает на предыдущую установленную версию.
+    pub fn rollback(&self, id: &str) -> Result<InstalledPackage, InstallError> {
+        let _guard = self.lock.lock().expect("блокировка установки");
+        let mut index = self.load_index()?;
+        let record = index
+            .packages
+            .get_mut(id)
+            .ok_or_else(|| InstallError::State(format!("пакет {id} не установлен в профиле")))?;
+        let active = Version::parse(&record.active_version)
+            .map_err(|error| InstallError::State(error.to_string()))?;
+        let previous = record
+            .versions
+            .keys()
+            .filter_map(|value| Version::parse(value).ok())
+            .filter(|version| *version < active)
+            .max()
+            .ok_or_else(|| InstallError::State(format!("у пакета {id} нет предыдущей версии")))?;
+        record.active_version = previous.to_string();
+        self.write_index(&index)?;
+        let record = index.packages.get(id).expect("запись после отката");
+        self.read_version(record, &previous.to_string())
+    }
+
+    /// Удаляет пакет и все его версии; повторный вызов безопасен.
+    pub fn remove(&self, id: &str) -> Result<bool, InstallError> {
+        let _guard = self.lock.lock().expect("блокировка установки");
+        let mut index = self.load_index()?;
+        if index.packages.remove(id).is_none() {
+            return Ok(false);
+        }
+        self.write_index(&index)?;
+        let directory = self.root.join(id);
+        if directory.exists() {
+            fs::remove_dir_all(directory)?;
+        }
+        Ok(true)
+    }
+
+    /// Публикует активную версию в плоский каталог модулей хоста.
+    pub fn publish_to(&self, id: &str, target_root: &Path) -> Result<PathBuf, InstallError> {
+        let package = self
+            .package(id)?
+            .ok_or_else(|| InstallError::State(format!("пакет {id} не установлен")))?;
+        let source = self.version_dir(&package.id, &package.version);
+        fs::create_dir_all(target_root)?;
+        let target = target_root.join(id);
+        let temp = target_root.join(format!(".tmp-{id}"));
+        if temp.exists() {
+            fs::remove_dir_all(&temp)?;
+        }
+        copy_directory(source.as_path(), &temp)?;
+        if target.exists() {
+            fs::remove_dir_all(&target)?;
+        }
+        fs::rename(&temp, &target)?;
+        Ok(target.join(MANIFEST_ENTRY))
+    }
+
     fn load_index(&self) -> Result<StoreIndex, InstallError> {
         let path = self.index_path();
         let bytes = match fs::read(&path) {
@@ -541,6 +637,21 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), PackageError> {
 
 #[cfg(not(unix))]
 fn set_mode(_path: &Path, _mode: u32) -> Result<(), PackageError> {
+    Ok(())
+}
+
+fn copy_directory(source: &Path, target: &Path) -> io::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let path = entry.path();
+        let destination = target.join(entry.file_name());
+        if path.is_dir() {
+            copy_directory(&path, &destination)?;
+        } else {
+            fs::copy(&path, &destination)?;
+        }
+    }
     Ok(())
 }
 
@@ -820,5 +931,40 @@ mod tests {
         let installed = reopened.installed().expect("каталог");
         assert_eq!(installed.len(), 1);
         assert!(!installed[0].enabled);
+    }
+
+    #[test]
+    fn activate_rollback_remove_and_publish() {
+        let signer = signer(21);
+        let publisher = "org.utilmaker";
+        let trust = trust(&[(publisher, &signer)]);
+        let root = std::env::temp_dir().join(format!("um-unify-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = PackageStore::open(root.join("profile")).unwrap();
+
+        let v1 = package(&manifest(publisher, "0.1.0", b"v1"), b"v1", &signer);
+        let v2 = package(&manifest(publisher, "0.2.0", b"v2"), b"v2", &signer);
+        store
+            .install_bytes(&v1, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        store
+            .install_bytes(&v2, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        assert_eq!(store.versions(MODULE_ID).unwrap(), vec!["0.1.0", "0.2.0"]);
+        assert_eq!(store.activate(MODULE_ID, "0.1.0").unwrap().version, "0.1.0");
+        assert!(store
+            .rollback(MODULE_ID)
+            .unwrap_err()
+            .to_string()
+            .contains("нет предыдущей"));
+
+        let active = store.activate(MODULE_ID, "0.2.0").unwrap();
+        assert_eq!(active.version, "0.2.0");
+        let published = store.publish_to(MODULE_ID, &root.join("catalog")).unwrap();
+        assert!(published.is_file());
+
+        assert!(store.remove(MODULE_ID).unwrap());
+        assert!(!store.remove(MODULE_ID).unwrap());
+        assert!(store.package(MODULE_ID).unwrap().is_none());
     }
 }

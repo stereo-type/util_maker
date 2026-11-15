@@ -4742,6 +4742,7 @@ name = "util-maker-platform"
 version = "0.4.3"
 dependencies = [
  "serde_json",
+ "thiserror 2.0.21",
  "util-maker-core",
  "util-maker-sdk",
  "windows",

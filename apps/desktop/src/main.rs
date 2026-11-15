@@ -33,7 +33,9 @@ use util_maker_core::hotkeys::{
 use util_maker_core::{
     ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
 };
-use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
+use util_maker_platform::{
+    DpapiSecretStore, HotkeyEvent, HotkeyService, RegisterFailure, SecretStore,
+};
 use util_maker_sdk::{protocol::InvocationSource, Action, Manifest, SettingsSchema};
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
@@ -1360,6 +1362,11 @@ fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
         .map_err(|error| error.to_string())?;
     drop(manager);
     if removed {
+        if let Ok(data_directory) = app.path().app_local_data_dir() {
+            if let Ok(mut secrets) = DpapiSecretStore::open(data_directory.join("secrets")) {
+                let _ = secrets.remove_module(&plugin_id);
+            }
+        }
         if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
             runtime.remove_module(&plugin_id);
         }

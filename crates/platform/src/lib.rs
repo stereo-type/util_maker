@@ -12,8 +12,10 @@ use util_maker_core::hotkeys::{system_function, Hotkey};
 
 pub mod autostart;
 pub mod capture;
+pub mod secrets;
 
 pub use capture::{ScreenService, ScreenSource, ScreenSourceError};
+pub use secrets::{DpapiSecretStore, SecretError, SecretKey, SecretStore};
 
 /// Отказ регистрации, различимый интерфейсом.
 #[derive(Debug, Clone, PartialEq, Eq)]

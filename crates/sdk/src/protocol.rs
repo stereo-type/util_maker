@@ -177,6 +177,9 @@ pub struct InvokeRequest {
     pub action_id: String,
     #[serde(default)]
     pub context: CallContext,
+    /// Необязательные входные данные действия, например текст ручного ввода.
+    #[serde(default)]
+    pub params: serde_json::Value,
 }
 
 /// Конечный исход вызова.

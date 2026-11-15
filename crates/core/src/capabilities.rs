@@ -117,16 +117,8 @@ pub trait PlatformHost {
         ))
     }
 
-    fn selection_wait(
-        &mut self,
-        context: &CallSession,
-        _params: &Value,
-    ) -> Result<Value, RpcError> {
-        Err(unsupported(
-            context,
-            host_methods::SELECTION_WAIT,
-            &Value::Null,
-        ))
+    fn selection_wait(&mut self, context: &CallSession, params: &Value) -> Result<Value, RpcError> {
+        Err(unsupported(context, host_methods::SELECTION_WAIT, params))
     }
 
     fn buffer_copy(&mut self, context: &CallSession, params: &Value) -> Result<Value, RpcError> {
@@ -361,6 +353,10 @@ impl<H: PlatformHost> HostHandler for HostDispatcher<H> {
             host_methods::SELECTION_GET => {
                 self.require_source(&session)?;
                 self.platform.selection_get(&session)
+            }
+            host_methods::SELECTION_WAIT => {
+                self.require_source(&session)?;
+                self.platform.selection_wait(&session, &call.params)
             }
             host_methods::BUFFER_COPY => {
                 self.require_source(&session)?;

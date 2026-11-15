@@ -11,9 +11,10 @@ name = "translator-module"
 path = "src/main.rs"
 
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
-util-maker-sdk.workspace = true
 util-maker-providers = { path = "providers" }
+util-maker-sdk.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 util-maker-platform = { path = "../../crates/platform" }

@@ -13,7 +13,7 @@
     "selection.read",
     "settings.read",
     "secret.read",
-    "buffer.copy"
+    "clipboard.write"
   ],
   "actions": [
     {
@@ -27,10 +27,11 @@
   ],
   "settings": {
     "schemaVersion": 1,
+    "profileField": "activeProfile",
     "fields": [
       {
         "id": "activeProfile",
-        "label": "Сервис перевода",
+        "label": "Активный профиль",
         "type": "select",
         "default": "yandex",
         "options": [
@@ -43,58 +44,132 @@
             "label": "Google"
           }
         ]
-      },
+      }
+    ],
+    "profiles": [
       {
-        "id": "sourceLang",
-        "label": "Исходный язык",
-        "type": "select",
-        "default": "auto",
-        "options": [
+        "id": "yandex",
+        "name": "Яндекс",
+        "fields": [
           {
-            "value": "auto",
-            "label": "Определить автоматически"
+            "id": "sourceLang",
+            "label": "Исходный язык",
+            "type": "select",
+            "default": "auto",
+            "options": [
+              {
+                "value": "auto",
+                "label": "Авто"
+              },
+              {
+                "value": "en",
+                "label": "Английский"
+              },
+              {
+                "value": "ru",
+                "label": "Русский"
+              },
+              {
+                "value": "de",
+                "label": "Немецкий"
+              }
+            ]
           },
           {
-            "value": "en",
-            "label": "Английский"
+            "id": "targetLang",
+            "label": "Целевой язык",
+            "type": "select",
+            "default": "ru",
+            "options": [
+              {
+                "value": "en",
+                "label": "Английский"
+              },
+              {
+                "value": "ru",
+                "label": "Русский"
+              },
+              {
+                "value": "de",
+                "label": "Немецкий"
+              }
+            ]
           },
           {
-            "value": "ru",
-            "label": "Русский"
-          },
-          {
-            "value": "de",
-            "label": "Немецкий"
+            "id": "apiKey",
+            "label": "API-ключ",
+            "type": "secret",
+            "required": true,
+            "secretRef": "translator/yandex/apiKey"
           }
         ]
       },
       {
-        "id": "targetLang",
-        "label": "Целевой язык",
-        "type": "text",
-        "default": "ru",
-        "required": true
-      },
-      {
-        "id": "yandexApiKey",
-        "label": "Ключ Яндекса",
-        "type": "secret",
-        "secretRef": "translator/yandex/apiKey"
-      },
-      {
-        "id": "googleApiKey",
-        "label": "Ключ Google",
-        "type": "secret",
-        "secretRef": "translator/google/apiKey"
+        "id": "google",
+        "name": "Google",
+        "fields": [
+          {
+            "id": "sourceLang",
+            "label": "Исходный язык",
+            "type": "select",
+            "default": "auto",
+            "options": [
+              {
+                "value": "auto",
+                "label": "Авто"
+              },
+              {
+                "value": "en",
+                "label": "Английский"
+              },
+              {
+                "value": "ru",
+                "label": "Русский"
+              },
+              {
+                "value": "de",
+                "label": "Немецкий"
+              }
+            ]
+          },
+          {
+            "id": "targetLang",
+            "label": "Целевой язык",
+            "type": "select",
+            "default": "ru",
+            "options": [
+              {
+                "value": "en",
+                "label": "Английский"
+              },
+              {
+                "value": "ru",
+                "label": "Русский"
+              },
+              {
+                "value": "de",
+                "label": "Немецкий"
+              }
+            ]
+          },
+          {
+            "id": "apiKey",
+            "label": "API-ключ",
+            "type": "secret",
+            "required": true,
+            "secretRef": "translator/google/apiKey"
+          }
+        ]
       }
     ],
     "commands": [
       {
         "id": "testConnection",
         "name": "Проверить подключение",
+        "profileField": "activeProfile",
         "fields": [
-          "yandexApiKey",
-          "googleApiKey"
+          "sourceLang",
+          "targetLang"
         ]
       }
     ]

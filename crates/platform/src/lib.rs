@@ -6,22 +6,24 @@
 //! собирать и тестировать переносимое ядро на Linux.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use util_maker_core::hotkeys::{system_function, Hotkey};
+use util_maker_core::{CallSession, PlatformHost};
+use util_maker_sdk::{FrameRef, FrameRequest, RpcError};
 
 pub mod autostart;
 pub mod capture;
-pub mod clipboard;
-pub mod secrets;
 pub mod selection;
 
 pub use capture::{ScreenService, ScreenSource, ScreenSourceError};
-pub use clipboard::{ClipboardContent, ClipboardError, ClipboardWriter, SystemClipboard};
-pub use secrets::{DpapiSecretStore, SecretError, SecretKey, SecretStore};
-#[cfg(windows)]
-pub use selection::WindowsSelectionSource;
-pub use selection::{SelectionSnapshot, SelectionSource, UnsupportedSelection};
+pub use clipboard::ClipboardError;
+pub use selection::{
+    CapturedSource, NativeCapture, ScreenPoint, SelectionBackend, SelectionError, SelectionEvent,
+    SelectionService, SelectionSnapshot, SelectionState, WaitOutcome, DEFAULT_SELECTION_WAIT,
+};
+pub use settings::{SecretStore, SettingsError, SettingsStore, StoredSettings};
 
 /// Отказ регистрации, различимый интерфейсом.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,9 +57,29 @@ mod native_capture;
 use capture::UnsupportedScreen as NativeScreen;
 
 #[cfg(windows)]
+#[path = "windows_selection.rs"]
+mod native_selection;
+
+pub mod clipboard;
+pub mod settings;
+
+/// Нативная реализация чтения выделения текущей ОС.
+#[cfg(windows)]
+pub use native_selection::WindowsSelection as NativeSelectionBackend;
+#[cfg(not(windows))]
+pub use selection::UnsupportedSelection as NativeSelectionBackend;
+
+pub type NativeSelection = SelectionService<NativeSelectionBackend>;
+
+#[cfg(windows)]
 pub type NativeScreenService = ScreenService<native_capture::WindowsScreen>;
 #[cfg(not(windows))]
 pub type NativeScreenService = ScreenService<NativeScreen>;
+
+/// Создаёт службу чтения выделения с нативным источником текущей ОС.
+pub fn selection_service() -> NativeSelection {
+    SelectionService::new(NativeSelectionBackend)
+}
 
 /// Создаёт службу захвата с нативным источником текущей ОС.
 pub fn screen_service() -> NativeScreenService {
@@ -69,6 +91,129 @@ pub fn screen_service() -> NativeScreenService {
     {
         ScreenService::new(NativeScreen)
     }
+}
+
+/// Платформенный хост для одного вызова: кадры и закреплённые источники
+/// выделения живут в общем хранилище приложения и освобождаются диспетчером.
+pub struct NativeHost {
+    screen: NativeScreenService,
+    selection: Arc<Mutex<NativeSelection>>,
+    settings: Arc<SettingsStore>,
+}
+
+impl NativeHost {
+    pub fn new(selection: Arc<Mutex<NativeSelection>>, settings: Arc<SettingsStore>) -> Self {
+        Self {
+            screen: screen_service(),
+            selection,
+            settings,
+        }
+    }
+
+    pub fn selection(&self) -> &Arc<Mutex<NativeSelection>> {
+        &self.selection
+    }
+
+    pub fn settings(&self) -> &Arc<SettingsStore> {
+        &self.settings
+    }
+}
+
+impl PlatformHost for NativeHost {
+    fn capture_frame(
+        &mut self,
+        context: &CallSession,
+        request: &FrameRequest,
+    ) -> Result<FrameRef, RpcError> {
+        self.screen.capture_frame(context, request)
+    }
+
+    fn release_frame(&mut self, context: &CallSession, buffer_id: &str) -> Result<(), RpcError> {
+        self.screen.release_frame(context, buffer_id)
+    }
+
+    fn selection_get(&mut self, context: &CallSession) -> Result<serde_json::Value, RpcError> {
+        let mut selection = self.selection.lock().map_err(|_| {
+            RpcError::new(
+                util_maker_sdk::error_codes::INTERNAL_ERROR,
+                "хранилище источников выделения повреждено",
+            )
+        })?;
+        selection.selection_get(context)
+    }
+
+    fn selection_wait(
+        &mut self,
+        context: &CallSession,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        let mut selection = self.selection.lock().map_err(|_| {
+            RpcError::new(
+                util_maker_sdk::error_codes::INTERNAL_ERROR,
+                "хранилище источников выделения повреждено",
+            )
+        })?;
+        selection.selection_wait(context, params)
+    }
+
+    fn settings_read(
+        &mut self,
+        context: &CallSession,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        let profile = params.get("profile").and_then(serde_json::Value::as_str);
+        self.settings
+            .read(&context.module_id, profile)
+            .map_err(settings_rpc_error)
+    }
+
+    fn buffer_copy(
+        &mut self,
+        _context: &CallSession,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        let Some(text) = params.get("text").and_then(serde_json::Value::as_str) else {
+            return Err(RpcError::new(
+                util_maker_sdk::error_codes::INVALID_PARAMS,
+                "не передан текст для буфера обмена",
+            ));
+        };
+        clipboard::write_text(text).map_err(|error| {
+            RpcError::new(
+                util_maker_sdk::error_codes::CAPABILITY_DENIED,
+                error.to_string(),
+            )
+        })?;
+        Ok(serde_json::json!({
+            "copied": true,
+            "bytes": text.len(),
+        }))
+    }
+
+    fn secret_read(
+        &mut self,
+        context: &CallSession,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        let Some(key) = params.get("key").and_then(serde_json::Value::as_str) else {
+            return Err(RpcError::new(
+                util_maker_sdk::error_codes::INVALID_PARAMS,
+                "не передана ссылка на секрет",
+            ));
+        };
+        let value = self
+            .settings
+            .read_secret(&context.module_id, key)
+            .map_err(settings_rpc_error)?;
+        Ok(value.map_or(serde_json::Value::Null, serde_json::Value::String))
+    }
+}
+
+fn settings_rpc_error(error: settings::SettingsError) -> RpcError {
+    RpcError::new(
+        util_maker_sdk::error_codes::INTERNAL_ERROR,
+        error.to_string(),
+    )
 }
 
 /// Служба глобальных сочетаний.
@@ -171,7 +316,6 @@ pub fn cursor_position() -> Option<(i32, i32)> {
     Some((point.x, point.y))
 }
 
-/// Позиция курсора в физических пикселях виртуального рабочего стола.
 #[cfg(not(windows))]
 pub fn cursor_position() -> Option<(i32, i32)> {
     None

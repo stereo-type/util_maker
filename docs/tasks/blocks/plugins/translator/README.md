@@ -7,5 +7,5 @@
 | [Добавить исполняемый процесс плагина «Переводчик»](module-process.md) | ✅ Выполнена |
 | [Связать выделение и окно результата с действием перевода](translate-selection.md) | 🛠️ В работе |
 | [Не показывать заблокированный перевод как успех](blocked-result-status.md) | ✅ Выполнена |
-| [Читать выделение Блокнота через UI Automation](selection-notepad-context-lost.md) | 📥 К выполнению |
 | [Сохранять ключ под профилем выбранного сервиса](secret-profile-mismatch.md) | ✅ Выполнена |
+| [Читать выделение Блокнота через UI Automation](selection-notepad-context-lost.md) | 📥 К выполнению |

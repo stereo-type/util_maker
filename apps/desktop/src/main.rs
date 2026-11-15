@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use package_manager::PackageManager;
@@ -32,17 +32,15 @@ use util_maker_core::hotkeys::{
 };
 use util_maker_core::ipc::ModuleProcess;
 use util_maker_core::{
-    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, PlatformHost,
-    Registry,
+    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
 };
 use util_maker_platform::{
-    screen_service, ClipboardContent, ClipboardWriter, DpapiSecretStore, HotkeyEvent,
-    HotkeyService, NativeScreenService, RegisterFailure, ScreenSource, SecretStore,
-    SelectionSnapshot, SelectionSource, SystemClipboard, UnsupportedSelection,
+    clipboard, screen_service, selection_service, HotkeyEvent, HotkeyService, NativeHost,
+    RegisterFailure, ScreenSource, SettingsStore,
 };
 use util_maker_sdk::{
-    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, FrameRef,
-    FrameRequest, Manifest, SettingsSchema,
+    protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, Manifest,
+    SettingsSchema,
 };
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
@@ -60,6 +58,7 @@ struct AppState {
     metrics: Mutex<DiagnosticsLog>,
     packages: Mutex<PackageManager>,
     overlay: Mutex<Option<OverlayFrame>>,
+    settings: Arc<SettingsStore>,
 }
 
 struct OverlayFrame {
@@ -720,6 +719,9 @@ fn main() {
                 .app_local_data_dir()
                 .map_err(|error| format!("каталог данных: {error}"))?;
             let packages = PackageManager::open(&data_directory, catalog.root.clone())?;
+            let settings_root = data_directory.join("module-settings");
+            std::fs::create_dir_all(&settings_root)
+                .map_err(|error| format!("каталог настроек: {error}"))?;
             let state = AppState {
                 last_result: Mutex::new(None),
                 catalog,
@@ -727,6 +729,7 @@ fn main() {
                 metrics: Mutex::new(metrics),
                 packages: Mutex::new(packages),
                 overlay: Mutex::new(None),
+                settings: Arc::new(SettingsStore::new(settings_root)),
             };
             app.manage(state);
             let (runtime, events) = ShortcutRuntime::start(app.handle())?;
@@ -1089,167 +1092,6 @@ fn action_name_for(app: &AppHandle, target: &ActionRef) -> String {
         .unwrap_or_else(|| target.action_id.clone())
 }
 
-struct DesktopPlatform {
-    screen: NativeScreenService,
-    selection: Box<dyn SelectionSource>,
-    secrets: PathBuf,
-}
-
-impl DesktopPlatform {
-    fn new(app: &AppHandle) -> Self {
-        let selection: Box<dyn SelectionSource> = {
-            #[cfg(windows)]
-            {
-                match util_maker_platform::WindowsSelectionSource::new() {
-                    Ok(source) => Box::new(source),
-                    Err(_) => Box::new(UnsupportedSelection),
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                Box::new(UnsupportedSelection)
-            }
-        };
-        let secrets = app
-            .path()
-            .app_local_data_dir()
-            .map(|directory| directory.join("secrets"))
-            .unwrap_or_else(|_| PathBuf::from("secrets"));
-        Self {
-            screen: screen_service(),
-            selection,
-            secrets,
-        }
-    }
-}
-
-impl PlatformHost for DesktopPlatform {
-    fn capture_frame(
-        &mut self,
-        context: &util_maker_core::CallSession,
-        request: &FrameRequest,
-    ) -> Result<FrameRef, util_maker_sdk::RpcError> {
-        self.screen.capture_frame(context, request)
-    }
-
-    fn release_frame(
-        &mut self,
-        context: &util_maker_core::CallSession,
-        buffer_id: &str,
-    ) -> Result<(), util_maker_sdk::RpcError> {
-        self.screen.release_frame(context, buffer_id)
-    }
-
-    fn selection_get(
-        &mut self,
-        _context: &util_maker_core::CallSession,
-    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
-        let value = match self.selection.snapshot() {
-            SelectionSnapshot::Text(text) => serde_json::json!({"state": "text", "text": text}),
-            SelectionSnapshot::Empty => serde_json::json!({"state": "empty"}),
-            SelectionSnapshot::Unsupported => serde_json::json!({"state": "unsupported"}),
-            SelectionSnapshot::Password => serde_json::json!({"state": "password"}),
-            SelectionSnapshot::ContextLost => serde_json::json!({"state": "context-lost"}),
-        };
-        Ok(value)
-    }
-
-    fn selection_wait(
-        &mut self,
-        _context: &util_maker_core::CallSession,
-        params: &serde_json::Value,
-    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
-        let timeout = params
-            .get("timeoutMs")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(5_000);
-        match self
-            .selection
-            .wait_for_selection(std::time::Duration::from_millis(timeout))
-        {
-            Some(text) => Ok(serde_json::json!({"state": "text", "text": text})),
-            None => Ok(serde_json::json!({"state": "empty"})),
-        }
-    }
-
-    fn buffer_copy(
-        &mut self,
-        _context: &util_maker_core::CallSession,
-        params: &serde_json::Value,
-    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
-        let content = if let Some(text) = params.get("text").and_then(|value| value.as_str()) {
-            ClipboardContent::Text(text.to_owned())
-        } else {
-            let width = params.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let height = params.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let rgba = params
-                .get("rgba")
-                .and_then(|value| value.as_array())
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| item.as_u64().map(|value| value as u8))
-                        .collect()
-                })
-                .unwrap_or_default();
-            ClipboardContent::Image {
-                width,
-                height,
-                rgba,
-            }
-        };
-        SystemClipboard::new()
-            .write(&content)
-            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
-        Ok(serde_json::json!({"copied": true}))
-    }
-
-    fn settings_read(
-        &mut self,
-        context: &util_maker_core::CallSession,
-        _params: &serde_json::Value,
-    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
-        let directory = self
-            .secrets
-            .parent()
-            .map(|parent| parent.join("plugin-settings"))
-            .unwrap_or_else(|| PathBuf::from("plugin-settings"));
-        let path = directory.join(format!("{}.json", context.module_id));
-        if !path.exists() {
-            return Ok(serde_json::json!({}));
-        }
-        let bytes = std::fs::read(path)
-            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
-        serde_json::from_slice(&bytes)
-            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))
-    }
-
-    fn secret_read(
-        &mut self,
-        context: &util_maker_core::CallSession,
-        params: &serde_json::Value,
-    ) -> Result<serde_json::Value, util_maker_sdk::RpcError> {
-        let profile = params
-            .get("profile")
-            .and_then(|value| value.as_str())
-            .unwrap_or("default");
-        let name = params
-            .get("name")
-            .and_then(|value| value.as_str())
-            .unwrap_or("apiKey");
-        let store = DpapiSecretStore::open(&self.secrets)
-            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
-        let value = store
-            .get(&util_maker_platform::SecretKey::new(
-                &context.module_id,
-                profile,
-                name,
-            ))
-            .map_err(|error| util_maker_sdk::RpcError::new(2001, error.to_string()))?;
-        Ok(serde_json::json!({"value": value}))
-    }
-}
-
 fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
     let screen = screen_service();
     let geometry = screen.geometry().map_err(|error| error.message)?;
@@ -1308,7 +1150,10 @@ fn invoke_action(
         .ok_or_else(|| "каталог модулей не готов".to_owned())?;
     // Диспетчер живёт ровно один вызов: кадры и буферы освобождаются вместе
     // с ним, а параллельные действия не блокируют друг друга на время IPC.
-    let mut host = HostDispatcher::new(DesktopPlatform::new(app));
+    let mut host = HostDispatcher::new(NativeHost::new(
+        Arc::new(Mutex::new(selection_service())),
+        state.settings.clone(),
+    ));
     state
         .catalog
         .registry
@@ -1749,10 +1594,8 @@ fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
         .map_err(|error| error.to_string())?;
     drop(manager);
     if removed {
-        if let Ok(data_directory) = app.path().app_local_data_dir() {
-            if let Ok(mut secrets) = DpapiSecretStore::open(data_directory.join("secrets")) {
-                let _ = secrets.remove_module(&plugin_id);
-            }
+        if let Ok(state) = app.try_state::<AppState>().ok_or(()) {
+            let _ = state.settings.remove_module(&plugin_id);
         }
         if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
             runtime.remove_module(&plugin_id);
@@ -1774,31 +1617,15 @@ fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
     Ok(removed)
 }
 
-fn settings_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, String> {
-    if plugin_id.is_empty()
-        || !plugin_id
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || ".-_".contains(character))
-    {
-        return Err("некорректный ID плагина".to_owned());
-    }
-    let directory = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| format!("каталог данных: {error}"))?
-        .join("plugin-settings");
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    Ok(directory.join(format!("{plugin_id}.json")))
-}
-
 #[tauri::command]
 fn plugin_settings(app: AppHandle, plugin_id: String) -> Result<serde_json::Value, String> {
-    let path = settings_path(&app, &plugin_id)?;
-    if !path.exists() {
-        return Ok(serde_json::json!({}));
-    }
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("настройки плагина: {error}"))
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "настройки недоступны".to_owned())?;
+    state
+        .settings
+        .read(&plugin_id, None)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1807,11 +1634,22 @@ fn save_plugin_settings(
     plugin_id: String,
     values: serde_json::Value,
 ) -> Result<(), String> {
-    let path = settings_path(&app, &plugin_id)?;
-    let temp = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(&values).map_err(|error| error.to_string())?;
-    std::fs::write(&temp, bytes).map_err(|error| error.to_string())?;
-    std::fs::rename(temp, path).map_err(|error| error.to_string())
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "настройки недоступны".to_owned())?;
+    let active = values
+        .get("activeProfile")
+        .and_then(serde_json::Value::as_str);
+    let map = values
+        .as_object()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    state
+        .settings
+        .save(&plugin_id, active, None, &map)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1848,46 +1686,36 @@ fn invoke_form_command(
     result
 }
 
-fn secret_key(plugin_id: &str, profile: &str, name: &str) -> util_maker_platform::SecretKey {
-    util_maker_platform::SecretKey::new(plugin_id, profile, name)
-}
-
 #[tauri::command]
 fn plugin_secret_present(
     app: AppHandle,
     plugin_id: String,
-    profile: String,
+    _profile: String,
     name: String,
 ) -> Result<bool, String> {
-    let directory = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("secrets");
-    let store = DpapiSecretStore::open(&directory).map_err(|error| error.to_string())?;
-    match store.get(&secret_key(&plugin_id, &profile, &name)) {
-        Ok(_) => Ok(true),
-        Err(util_maker_platform::SecretError::NotFound) => Ok(false),
-        Err(error) => Err(error.to_string()),
-    }
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "настройки недоступны".to_owned())?;
+    state
+        .settings
+        .secret_present(&plugin_id, &name)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn set_plugin_secret(
     app: AppHandle,
     plugin_id: String,
-    profile: String,
+    _profile: String,
     name: String,
     value: String,
 ) -> Result<(), String> {
-    let directory = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("secrets");
-    let mut store = DpapiSecretStore::open(&directory).map_err(|error| error.to_string())?;
-    store
-        .set(&secret_key(&plugin_id, &profile, &name), &value)
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "настройки недоступны".to_owned())?;
+    state
+        .settings
+        .write_secret(&plugin_id, &name, &value)
         .map_err(|error| error.to_string())
 }
 
@@ -2485,13 +2313,7 @@ fn copy_overlay_image(width: u32, height: u32, rgba: String) -> Result<(), Strin
         .map(|index| u8::from_str_radix(&rgba[index * 2..index * 2 + 2], 16))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    SystemClipboard::new()
-        .write(&ClipboardContent::Image {
-            width,
-            height,
-            rgba: bytes,
-        })
-        .map_err(|error| error.to_string())
+    clipboard::write_image(width, height, &bytes).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2508,9 +2330,7 @@ fn close_overlay(app: AppHandle) {
 
 #[tauri::command]
 fn copy_text(text: String) -> Result<(), String> {
-    SystemClipboard::new()
-        .write(&ClipboardContent::Text(text))
-        .map_err(|error| error.to_string())
+    clipboard::write_text(&text).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

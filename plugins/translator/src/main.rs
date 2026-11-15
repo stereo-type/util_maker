@@ -6,13 +6,15 @@
 //! результата подключаются отдельной задачей, поэтому текущий снимок источника
 //! явно сообщает о потере контекста и не отправляет HTTP-запросов.
 
-use std::sync::atomic::AtomicBool;
-
 use serde_json::{json, Value};
-use util_maker_providers::{ProviderHub, ProviderSettings, ReqwestTransport};
+use util_maker_providers::ReqwestTransport;
 use util_maker_sdk::{
-    error_codes, run_stdio, HostBridge, InvokeRequest, InvokeResult, Module, ModuleInfo, RpcError,
-    HOST_API_VERSION,
+    error_codes, run_stdio, HostBridge, HostCallError, InvokeRequest, InvokeResult, Module,
+    ModuleInfo, RpcError, HOST_API_VERSION,
+};
+use util_maker_translator::service::{
+    translate_from_source, CLIPBOARD_CAPABILITY, SECRET_CAPABILITY, SELECTION_CAPABILITY,
+    SETTINGS_CAPABILITY,
 };
 use util_maker_translator::{BlockReason, SelectionController, SourceSnapshot, StartOutcome};
 
@@ -29,6 +31,7 @@ const MODULE_VERSION: &str = match option_env!("UTIL_MAKER_MODULE_VERSION") {
 struct TranslatorModule {
     info: ModuleInfo,
     selection: SelectionController,
+    transport: Option<ReqwestTransport>,
 }
 
 impl TranslatorModule {
@@ -38,10 +41,29 @@ impl TranslatorModule {
                 id: MODULE_ID,
                 version: MODULE_VERSION,
                 host_api: HOST_API_VERSION,
-                capabilities: &[],
+                capabilities: &[
+                    SELECTION_CAPABILITY,
+                    SETTINGS_CAPABILITY,
+                    SECRET_CAPABILITY,
+                    CLIPBOARD_CAPABILITY,
+                ],
             },
             selection: SelectionController::new(),
+            transport: ReqwestTransport::new().ok(),
         }
+    }
+
+    fn with_result(
+        request: &InvokeRequest,
+        outcome: util_maker_translator::TranslationOutcome,
+    ) -> InvokeResult {
+        let mut data = outcome.data();
+        if let Value::Object(ref mut object) = data {
+            object.insert("callId".to_owned(), json!(request.call_id));
+            object.insert("actionId".to_owned(), json!(request.action_id));
+            object.insert("moduleVersion".to_owned(), json!(MODULE_VERSION));
+        }
+        InvokeResult::ok(outcome.message()).with_data(data)
     }
 
     fn blocked_result(reason: BlockReason, request: &InvokeRequest) -> InvokeResult {
@@ -69,8 +91,9 @@ impl Module for TranslatorModule {
             ));
         }
 
-        let snapshot = selection_snapshot();
-        match self.selection.start(snapshot) {
+        // Без моста возможностей источник недоступен. Этот путь остаётся для
+        // старого контракта и офлайн-проверки явной причины отказа.
+        match self.selection.start(SourceSnapshot::ContextLost) {
             StartOutcome::Blocked(reason) => Ok(Self::blocked_result(reason, request)),
             StartOutcome::AwaitSelection => Ok(InvokeResult::ok(
                 "Выделите текст в исходном приложении одним жестом мыши.",
@@ -106,155 +129,22 @@ impl Module for TranslatorModule {
                 format!("неизвестное действие: {}", request.action_id),
             ));
         }
-        let mut snapshot = host_snapshot(host);
-        if matches!(snapshot, SourceSnapshot::Empty) {
-            let waited = host
-                .request(
-                    "selection.wait",
-                    "selection.wait",
-                    json!({"timeoutMs": 5000}),
-                )
-                .ok();
-            snapshot = match waited
-                .as_ref()
-                .and_then(|value| value.get("state").and_then(Value::as_str))
-            {
-                Some("text") => waited
-                    .as_ref()
-                    .and_then(|value| value.get("text").and_then(Value::as_str))
-                    .map(|text| SourceSnapshot::Selected(text.to_owned()))
-                    .unwrap_or(SourceSnapshot::Empty),
-                Some("empty") => SourceSnapshot::Empty,
-                Some("unsupported") => SourceSnapshot::Unsupported,
-                Some("password") => SourceSnapshot::Password,
-                _ => SourceSnapshot::ContextLost,
-            };
-            if matches!(snapshot, SourceSnapshot::Empty) {
-                return Ok(InvokeResult::ok(
-                    "Вставьте или введите текст и явно подтвердите перевод.",
-                )
-                .with_data(json!({
-                    "callId": request.call_id,
-                    "outcome": "manual-input",
-                    "httpRequests": 0,
-                })));
+        let transport = self.transport.as_ref().ok_or_else(|| {
+            RpcError::new(
+                error_codes::INTERNAL_ERROR,
+                "HTTP-транспорт переводчика недоступен",
+            )
+        })?;
+        let manual = request.params.get("manualText").and_then(Value::as_str);
+        match translate_from_source(host, transport, manual) {
+            Ok(outcome) => Ok(Self::with_result(request, outcome)),
+            Err(HostCallError::Cancelled) => Ok(InvokeResult::cancelled()),
+            Err(error) if error.rpc_code() == error_codes::CAPABILITY_DENIED => {
+                self.invoke(request)
             }
-        }
-        match self.selection.start(snapshot) {
-            StartOutcome::Translate(text) => translate_with_host(host, request, &text),
-            StartOutcome::Blocked(reason) => Ok(Self::blocked_result(reason, request)),
-            StartOutcome::AwaitSelection => Ok(InvokeResult::ok(
-                "Выделите текст в исходном приложении одним жестом мыши.",
-            )
-            .with_data(json!({
-                "callId": request.call_id,
-                "outcome": "awaiting-selection",
-                "httpRequests": 0,
-            }))),
-            StartOutcome::ManualInput => Ok(InvokeResult::ok(
-                "Вставьте или введите текст и явно подтвердите перевод.",
-            )
-            .with_data(json!({
-                "callId": request.call_id,
-                "outcome": "manual-input",
-                "httpRequests": 0,
-            }))),
+            Err(error) => Err(error.into_rpc_error()),
         }
     }
-}
-
-fn host_snapshot(host: &mut dyn HostBridge) -> SourceSnapshot {
-    let value = match host.request("selection.read", "selection.get", json!({})) {
-        Ok(value) => value,
-        Err(_) => return SourceSnapshot::ContextLost,
-    };
-    match value.get("state").and_then(Value::as_str) {
-        Some("text") => value
-            .get("text")
-            .and_then(Value::as_str)
-            .map(|text| SourceSnapshot::Selected(text.to_owned()))
-            .unwrap_or(SourceSnapshot::Empty),
-        Some("empty") => SourceSnapshot::Empty,
-        Some("unsupported") => SourceSnapshot::Unsupported,
-        Some("password") => SourceSnapshot::Password,
-        _ => SourceSnapshot::ContextLost,
-    }
-}
-
-fn translate_with_host(
-    host: &mut dyn HostBridge,
-    request: &InvokeRequest,
-    text: &str,
-) -> Result<InvokeResult, RpcError> {
-    let settings_value = host
-        .request("settings.read", "settings.read", json!({}))
-        .unwrap_or_else(|_| json!({}));
-    let settings = ProviderSettings::from_value(&settings_value)
-        .unwrap_or_else(|_| ProviderSettings::defaults());
-    let hub = ProviderHub::from_settings(&settings, |reference| {
-        let profile = if reference.contains("yandex") {
-            "yandex"
-        } else {
-            "google"
-        };
-        host.request(
-            "secret.read",
-            "secret.read",
-            json!({"profile": profile, "name": reference}),
-        )
-        .ok()
-        .and_then(|value| {
-            value
-                .get("value")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-    })
-    .map_err(|error| RpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))?;
-    if hub.missing_key_profile().is_some() {
-        return Ok(InvokeResult::ok(
-            "Для выбранного сервиса не задан API-ключ. Откройте настройки переводчика.",
-        )
-        .with_data(json!({
-            "callId": request.call_id,
-            "outcome": "missing-key",
-            "httpRequests": 0,
-        })));
-    }
-    let transport = ReqwestTransport::new()
-        .map_err(|error| RpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))?;
-    match hub.translate(text, &transport, &AtomicBool::new(false)) {
-        Ok(translation) => Ok(InvokeResult::ok(translation.text.clone()).with_data(json!({
-            "callId": request.call_id,
-            "outcome": "translated",
-            "provider": translation.provider.name(),
-            "text": translation.text,
-            "httpRequests": 1,
-        }))),
-        Err(error) => Err(RpcError::new(
-            error_codes::INTERNAL_ERROR,
-            error.to_string(),
-        )),
-    }
-}
-
-fn selection_snapshot() -> SourceSnapshot {
-    #[cfg(windows)]
-    {
-        use util_maker_platform::SelectionSource;
-        if let Ok(mut source) = util_maker_platform::WindowsSelectionSource::new() {
-            return match source.snapshot() {
-                util_maker_platform::SelectionSnapshot::Text(text) => {
-                    SourceSnapshot::Selected(text)
-                }
-                util_maker_platform::SelectionSnapshot::Empty => SourceSnapshot::Empty,
-                util_maker_platform::SelectionSnapshot::Unsupported => SourceSnapshot::Unsupported,
-                util_maker_platform::SelectionSnapshot::Password => SourceSnapshot::Password,
-                util_maker_platform::SelectionSnapshot::ContextLost => SourceSnapshot::ContextLost,
-            };
-        }
-    }
-    SourceSnapshot::ContextLost
 }
 
 fn main() {

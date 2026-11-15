@@ -19,6 +19,8 @@ pub mod selection;
 pub use capture::{ScreenService, ScreenSource, ScreenSourceError};
 pub use clipboard::{ClipboardContent, ClipboardError, ClipboardWriter, SystemClipboard};
 pub use secrets::{DpapiSecretStore, SecretError, SecretKey, SecretStore};
+#[cfg(windows)]
+pub use selection::WindowsSelectionSource;
 pub use selection::{SelectionSnapshot, SelectionSource, UnsupportedSelection};
 
 /// Отказ регистрации, различимый интерфейсом.

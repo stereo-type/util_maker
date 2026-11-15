@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use util_maker_core::{CallSession, PlatformHost};
@@ -88,6 +89,7 @@ struct StoredFrame {
     call_id: String,
     frame: FrameRef,
     pixels: Vec<u8>,
+    pixel_path: PathBuf,
     expires_at: Instant,
 }
 
@@ -136,6 +138,10 @@ impl<S: ScreenSource> ScreenService<S> {
 
         self.next_frame = self.next_frame.saturating_add(1);
         let buffer_id = format!("{call_id}-frame-{}", self.next_frame);
+        let pixel_path = frame_pixel_path(&buffer_id);
+        std::fs::write(&pixel_path, &raw.pixels).map_err(|error| {
+            RpcError::new(error_codes::INTERNAL_ERROR, format!("файл кадра: {error}"))
+        })?;
         let frame = FrameRef {
             buffer_id: buffer_id.clone(),
             format: FRAME_FORMAT_BGRA8.to_owned(),
@@ -149,6 +155,7 @@ impl<S: ScreenSource> ScreenService<S> {
             scale_factor,
             expires_in_ms: duration_ms(self.ttl),
             geometry: Some(geometry),
+            pixel_path: Some(pixel_path.to_string_lossy().into_owned()),
         };
         self.frames.insert(
             buffer_id,
@@ -156,6 +163,7 @@ impl<S: ScreenSource> ScreenService<S> {
                 call_id: call_id.to_owned(),
                 frame: frame.clone(),
                 pixels: raw.pixels,
+                pixel_path,
                 expires_at: Instant::now() + self.ttl,
             },
         );
@@ -185,7 +193,9 @@ impl<S: ScreenSource> ScreenService<S> {
                 "кадр принадлежит другому вызову",
             ));
         }
-        self.frames.remove(buffer_id);
+        if let Some(stored) = self.frames.remove(buffer_id) {
+            let _ = std::fs::remove_file(stored.pixel_path);
+        }
         Ok(())
     }
 
@@ -214,7 +224,9 @@ impl<S: ScreenSource> ScreenService<S> {
             .map(|(buffer_id, _)| buffer_id.clone())
             .collect();
         for buffer_id in expired {
-            self.frames.remove(&buffer_id);
+            if let Some(stored) = self.frames.remove(&buffer_id) {
+                let _ = std::fs::remove_file(stored.pixel_path);
+            }
         }
     }
 }
@@ -231,6 +243,28 @@ impl<S: ScreenSource> PlatformHost for ScreenService<S> {
     fn release_frame(&mut self, context: &CallSession, buffer_id: &str) -> Result<(), RpcError> {
         self.release(&context.call_id, buffer_id)
     }
+}
+
+impl<S: ScreenSource> Drop for ScreenService<S> {
+    fn drop(&mut self) {
+        for stored in self.frames.values() {
+            let _ = std::fs::remove_file(&stored.pixel_path);
+        }
+    }
+}
+
+fn frame_pixel_path(buffer_id: &str) -> PathBuf {
+    let safe: String = buffer_id
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || value == '-' || value == '_' {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    std::env::temp_dir().join(format!("util-maker-frame-{safe}.bgra"))
 }
 
 fn source_error(error: ScreenSourceError) -> RpcError {
@@ -626,6 +660,12 @@ mod tests {
             .capture_for_call("call-one", &FrameRequest::default())
             .expect("кадр");
         let buffer = frame.buffer_id.clone();
+        let pixel_path = frame.pixel_path.clone().expect("файл пикселей");
+        assert!(std::path::Path::new(&pixel_path).is_file());
+        assert_eq!(
+            std::fs::metadata(&pixel_path).expect("метаданные").len(),
+            u64::from(frame.stride) * u64::from(frame.height)
+        );
 
         let denied = service
             .frame_bytes("call-two", &buffer)
@@ -642,6 +682,34 @@ mod tests {
             .expect_err("ресурс освобождён");
         assert_eq!(expired.code, error_codes::BUFFER_EXPIRED);
         assert_eq!(service.buffered_frames(), 0);
+        assert!(!std::path::Path::new(&pixel_path).exists());
+    }
+
+    #[test]
+    fn large_frame_file_is_readable_and_cleaned_up() {
+        let mut service = ScreenService::new(SyntheticScreen::new());
+        let frame = service
+            .capture_for_call(
+                "call-large",
+                &FrameRequest {
+                    monitor: None,
+                    region: Some(FrameRegion {
+                        x: 0,
+                        y: 0,
+                        width: 1024,
+                        height: 1024,
+                    }),
+                },
+            )
+            .expect("большой кадр");
+        let pixels = frame.read_pixels().expect("файл пикселей читается");
+        assert_eq!(pixels.len(), 1024 * 1024 * 4);
+        assert!(pixels.len() > 1024 * 1024);
+        let path = frame.pixel_path.clone().unwrap();
+        service
+            .release("call-large", &frame.buffer_id)
+            .expect("release");
+        assert!(!std::path::Path::new(&path).exists());
     }
 
     #[test]

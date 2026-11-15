@@ -169,6 +169,28 @@ pub struct FrameRef {
     /// ответы без неё остаются совместимыми.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry: Option<ScreenGeometry>,
+    /// Локальный файл с BGRA8-пикселями. В JSON передаётся только путь:
+    /// процесс читает байты сам, а хост удаляет файл при release/истечении
+    /// ссылки или завершении вызова. Старые клиенты поле игнорируют.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_path: Option<String>,
+}
+
+impl FrameRef {
+    /// Читает локальную копию BGRA8-пикселей, созданную хостом для этого кадра.
+    ///
+    /// Файл принадлежит вызову и удаляется хостом после `frame.release`,
+    /// истечения `expiresInMs` или завершения вызова. Процесс должен скопировать
+    /// байты в память, если ему нужен кадр дольше срока ссылки.
+    pub fn read_pixels(&self) -> std::io::Result<Vec<u8>> {
+        let path = self.pixel_path.as_deref().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "хост не предоставил файл пикселей кадра",
+            )
+        })?;
+        std::fs::read(path)
+    }
 }
 
 /// Положение и масштаб одного монитора в физических пикселях виртуального
@@ -223,6 +245,7 @@ mod tests {
             origin: FrameOrigin { x: 0, y: 0 },
             scale_factor: 1.0,
             expires_in_ms: 5_000,
+            pixel_path: None,
             geometry: Some(ScreenGeometry {
                 virtual_screen: FrameRegion {
                     x: -1920,

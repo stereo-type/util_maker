@@ -37,6 +37,7 @@ impl HostHandler for FrameHost {
             scale_factor: 1.0,
             expires_in_ms: 5_000,
             geometry: None,
+            pixel_path: None,
         })
         .expect("сериализация FrameRef"))
     }

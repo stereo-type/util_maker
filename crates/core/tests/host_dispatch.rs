@@ -72,6 +72,7 @@ impl PlatformHost for SharedPlatform {
             scale_factor: 1.0,
             expires_in_ms: platform.expires_in_ms,
             geometry: None,
+            pixel_path: None,
         })
     }
 

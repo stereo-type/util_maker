@@ -949,7 +949,7 @@
         try {
           const installed = await invoke("install_package", args);
           elements.packageResult.className = "result ok";
-          elements.packageResult.textContent = `Установлено: ${installed.name} ${installed.version}.`;
+          elements.packageResult.textContent = `Установлено: ${installed.manifest.name} ${installed.version}.`;
           await loadPlugins();
         } catch (error) {
           elements.packageResult.className = "result error";

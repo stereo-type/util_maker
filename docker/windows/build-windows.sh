@@ -61,6 +61,9 @@ done
 
 package_dir="$dist_dir/packages"
 mkdir -p "$package_dir/keys" "$package_dir/staging"
+# В установщик попадают только пакеты текущей версии. Без очистки dist
+# копит архивы прошлых сборок, и установщик раздувается до десятков мегабайт.
+find "$package_dir" -maxdepth 1 -type f -name '*.umpkg' -delete
 private_key="$package_dir/keys/org.utilmaker-private.json"
 public_key="$package_dir/keys/org.utilmaker-public.json"
 if [ ! -f "$private_key" ]; then

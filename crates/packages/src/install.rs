@@ -281,12 +281,31 @@ impl PackageStore {
                         version: manifest.version.clone(),
                     });
                 }
+                // Повторная установка уже распакованной версии должна
+                // возвращать её в активное состояние. Иначе после отката
+                // к более старой версии из интерфейса нельзя вернуться
+                // вперёд: откат идёт только назад, а установка ничего не
+                // меняла.
+                let previous_version = record.active_version.clone();
+                let already_active = previous_version == manifest.version;
+                if !already_active {
+                    let record = index
+                        .packages
+                        .get_mut(&manifest.id)
+                        .expect("запись установленного пакета");
+                    record.active_version = manifest.version.clone();
+                    self.write_index(&index)?;
+                }
+                let record = index
+                    .packages
+                    .get(&manifest.id)
+                    .expect("запись установленного пакета");
                 let package = self.read_version(record, &manifest.version)?;
                 return Ok(InstallResult {
-                    previous_version: if record.active_version == manifest.version {
+                    previous_version: if already_active {
                         None
                     } else {
-                        Some(record.active_version.clone())
+                        Some(previous_version)
                     },
                     package,
                     preview: verified.preview,
@@ -1051,6 +1070,14 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("нет предыдущей"));
+
+        let reinstalled = store
+            .install_bytes(&v2, &trust, "linux-x64", &Version::new(1, 0, 0))
+            .unwrap();
+        assert!(reinstalled.already_installed);
+        assert_eq!(reinstalled.package.version, "0.2.0");
+        assert_eq!(reinstalled.previous_version.as_deref(), Some("0.1.0"));
+        assert_eq!(store.package(MODULE_ID).unwrap().unwrap().version, "0.2.0");
 
         let active = store.activate(MODULE_ID, "0.2.0").unwrap();
         assert_eq!(active.version, "0.2.0");

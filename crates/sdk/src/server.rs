@@ -89,6 +89,16 @@ pub trait Module {
         ))
     }
 
+    /// Вариант команды формы с доступом к возможностям хоста. По умолчанию
+    /// делегирует в [`Module::command`], поэтому старые модули не меняются.
+    fn command_with_host(
+        &mut self,
+        request: &FormCommandRequest,
+        _host: &mut dyn HostBridge,
+    ) -> Result<FormCommandResult, RpcError> {
+        self.command(request)
+    }
+
     /// Запрос отмены активного вызова.
     fn cancel(&mut self, _call_id: &str) {}
 
@@ -403,14 +413,26 @@ where
                 )),
             },
             "command" => match serde_json::from_value::<FormCommandRequest>(request.params) {
-                Ok(params) => module.command(&params).and_then(|result| {
-                    serde_json::to_value(result).map_err(|error| {
-                        RpcError::new(
-                            error_codes::INTERNAL_ERROR,
-                            format!("сериализация command: {error}"),
-                        )
-                    })
-                }),
+                Ok(params) => {
+                    let call_id = format!("command:{}", params.command_id);
+                    let capabilities = module
+                        .info()
+                        .capabilities
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect();
+                    let mut host = StdioHostBridge::new(output, &incoming, call_id, capabilities);
+                    module
+                        .command_with_host(&params, &mut host)
+                        .and_then(|result| {
+                            serde_json::to_value(result).map_err(|error| {
+                                RpcError::new(
+                                    error_codes::INTERNAL_ERROR,
+                                    format!("сериализация command: {error}"),
+                                )
+                            })
+                        })
+                }
                 Err(error) => Err(RpcError::new(
                     error_codes::INVALID_PARAMS,
                     format!("параметры command: {error}"),

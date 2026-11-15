@@ -3,7 +3,7 @@
   "id": "org.utilmaker.color-picker",
   "publisher": "org.utilmaker",
   "name": "Пипетка цвета",
-  "version": "0.4.11",
+  "version": "0.4.30",
   "hostApi": ">=1.0.0 <2.0.0",
   "entrypoints": {
     "windows-x64": "color-picker-module.exe",

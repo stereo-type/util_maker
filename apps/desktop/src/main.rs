@@ -32,11 +32,12 @@ use util_maker_core::hotkeys::{
 };
 use util_maker_core::ipc::ModuleProcess;
 use util_maker_core::{
-    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
+    ActionRef, CallSession, HostDispatcher, HostSession, InvocationContext, InvokeOutcome,
+    ModuleEntry, Registry,
 };
 use util_maker_platform::{
     clipboard, screen_service, selection_service, HotkeyEvent, HotkeyService, NativeHost,
-    RegisterFailure, ScreenSource, SettingsStore,
+    NativeSelection, RegisterFailure, ScreenSource, SettingsStore,
 };
 use util_maker_sdk::{
     protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, Manifest,
@@ -452,20 +453,37 @@ impl ShortcutRuntime {
         }
     }
 
-    /// Возвращает состояние основного сочетания после повторной регистрации.
+    /// Повторно регистрирует все сочетания. Возвращает `true`, только если
+    /// зарегистрированы все, включая основное сочетание контрольного модуля.
     fn register_all(&self) -> bool {
         let Ok(registrations) = self.registrations.lock() else {
             return false;
         };
         let service = self.service.lock().expect("служба сочетаний");
-        let mut control = false;
+        let mut all_ok = true;
         for (id, registration) in registrations.iter() {
-            let registered = service.register(&registration.combo, *id).is_ok();
-            if *id == HOTKEY_ID {
-                control = registered;
+            if let Err(error) = service.register(&registration.combo, *id) {
+                logging::write(&format!(
+                    "сочетание {} для {} / {} не зарегистрировано: {}",
+                    registration.combo,
+                    registration.target.module_id,
+                    registration.target.action_id,
+                    register_failure_message(error)
+                ));
+                all_ok = false;
             }
         }
-        control
+        if !registrations.contains_key(&HOTKEY_ID) {
+            let combo = self.combo.lock().expect("сочетание").clone();
+            if let Err(error) = service.register(&combo, HOTKEY_ID) {
+                logging::write(&format!(
+                    "основное сочетание {combo} не зарегистрировано: {}",
+                    register_failure_message(error)
+                ));
+                all_ok = false;
+            }
+        }
+        all_ok
     }
 
     fn remove_module(&self, module_id: &str) {
@@ -544,6 +562,22 @@ fn remove_saved_shortcut(app: &AppHandle, module_id: &str, action_id: &str, comb
     write_shortcut_map(app, &map);
 }
 
+/// Убирает из профиля сохранённые сочетания удалённого пакета. Без этого
+/// назначения прежнего модуля возвращались после повторной установки.
+fn drop_module_shortcuts(map: &mut BTreeMap<String, Vec<String>>, module_id: &str) {
+    let prefix = format!("{module_id}/");
+    map.retain(|key, _| !key.starts_with(&prefix));
+}
+
+fn remove_saved_shortcuts_for_module(app: &AppHandle, module_id: &str) {
+    let mut map = persisted_shortcut_map(app);
+    let before = map.len();
+    drop_module_shortcuts(&mut map, module_id);
+    if map.len() != before {
+        write_shortcut_map(app, &map);
+    }
+}
+
 fn sync_action_hotkeys(app: &AppHandle) {
     let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
         return;
@@ -570,6 +604,9 @@ fn sync_action_hotkeys(app: &AppHandle) {
         })
         .unwrap_or_default();
     for action in actions {
+        if action.module_id == CONTROL_MODULE_ID {
+            continue;
+        }
         let key = format!("{}/{}", action.module_id, action.action_id);
         let combos = persisted.get(&key).cloned().unwrap_or_else(|| {
             state
@@ -1424,10 +1461,40 @@ fn get_overlay_geometry(app: AppHandle) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Захватывает внешнее окно до открытия окон приложения. Тот же сервис
+/// передаётся в `HostDispatcher`, иначе ссылка на источник не будет найдена.
+fn capture_selection_source() -> (
+    Arc<Mutex<NativeSelection>>,
+    Option<util_maker_core::SourceRef>,
+) {
+    let selection = Arc::new(Mutex::new(selection_service()));
+    let mut source_ref = None;
+    match selection.lock() {
+        Ok(mut service) => match service.capture_foreground() {
+            Ok(captured) => {
+                logging::write(&format!(
+                    "источник вызова: pid={} окно={}x{}",
+                    captured.process_id, captured.window.width, captured.window.height
+                ));
+                if captured.process_id != std::process::id() {
+                    source_ref = Some(captured.as_ref());
+                } else {
+                    logging::write("источник вызова: собственное окно приложения");
+                }
+            }
+            Err(error) => logging::write(&format!("источник вызова: ошибка {error:?}")),
+        },
+        Err(_) => logging::write("источник вызова: сервис выделения занят"),
+    }
+    (selection, source_ref)
+}
+
 fn invoke_action(
     app: &AppHandle,
     target: &ActionRef,
     source: InvocationSource,
+    selection: Arc<Mutex<NativeSelection>>,
+    context: InvocationContext,
 ) -> Result<InvokeOutcome, String> {
     logging::debug(&format!(
         "вызов действия module={} action={} source={}",
@@ -1440,16 +1507,13 @@ fn invoke_action(
         .ok_or_else(|| "каталог модулей не готов".to_owned())?;
     // Диспетчер живёт ровно один вызов: кадры и буферы освобождаются вместе
     // с ним, а параллельные действия не блокируют друг друга на время IPC.
-    let mut host = HostDispatcher::new(NativeHost::new(
-        Arc::new(Mutex::new(selection_service())),
-        state.settings.clone(),
-    ));
+    let mut host = HostDispatcher::new(NativeHost::new(selection, state.settings.clone()));
     state
         .catalog
         .registry
         .invoke_session(
             target,
-            InvocationContext::new(source),
+            context,
             INVOKE_TIMEOUT,
             Some(logging::logger()),
             &mut host,
@@ -1470,6 +1534,11 @@ fn outcome_status(outcome: &InvokeOutcome) -> &'static str {
 }
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
+    let (selection, source_ref) = capture_selection_source();
+    let context = match source {
+        InvocationSource::Hotkey => InvocationContext::hotkey(source_ref),
+        InvocationSource::Tray => InvocationContext::tray(source_ref),
+    };
     if target.module_id == "org.utilmaker.screenshot" && target.action_id == "capture-region" {
         if let Err(error) = open_screenshot_overlay(app) {
             show_result(
@@ -1504,7 +1573,7 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
             },
         );
     }
-    match invoke_action(app, &target, source) {
+    match invoke_action(app, &target, source, selection, context) {
         Ok(outcome) => {
             let since_event = started.elapsed();
             logging::write(&format!(
@@ -1895,6 +1964,7 @@ fn remove_package(app: AppHandle, plugin_id: String) -> Result<bool, String> {
         if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
             runtime.remove_module(&plugin_id);
         }
+        remove_saved_shortcuts_for_module(&app, &plugin_id);
     }
     if removed && plugin_id == CONTROL_MODULE_ID {
         if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
@@ -1974,9 +2044,26 @@ fn invoke_form_command(
         values: values.into_iter().collect(),
         secrets: Default::default(),
     };
+    let call_id = format!("command:{}", request.command_id);
+    let mut host = HostDispatcher::new(NativeHost::new(
+        Arc::new(Mutex::new(selection_service())),
+        state.settings.clone(),
+    ));
+    host.begin_call(&CallSession::new(
+        call_id.clone(),
+        plugin_id.clone(),
+        String::new(),
+        InvocationContext::new(InvocationSource::Tray),
+    ));
     let result = process
-        .form_command(&request, Duration::from_secs(10))
+        .form_command_with_host(
+            &request,
+            Duration::from_secs(10),
+            &mut host,
+            &entry.manifest.capabilities,
+        )
         .map_err(|error| error.to_string());
+    host.finish_call(&call_id);
     process.shutdown();
     result
 }
@@ -2059,13 +2146,20 @@ fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Resul
                         return Err(register_failure_message(error));
                     }
                     runtime.registered.store(true, Ordering::SeqCst);
-                    runtime.paused.store(false, Ordering::SeqCst);
                     drop(service);
+                    if let Ok(mut registrations) = runtime.registrations.lock() {
+                        registrations.insert(
+                            HOTKEY_ID,
+                            Registration {
+                                combo,
+                                target: control_action_ref(),
+                            },
+                        );
+                    }
                     set_shortcut_status(&app, "зарегистрировано");
                 } else {
                     service.unregister(HOTKEY_ID);
                     runtime.registered.store(false, Ordering::SeqCst);
-                    runtime.paused.store(true, Ordering::SeqCst);
                     drop(service);
                     set_shortcut_status(&app, "отключён");
                 }
@@ -2503,11 +2597,14 @@ async fn invoke_target(
     };
     let handle = app.clone();
     let call_target = target.clone();
+    let context = InvocationContext::new(parsed);
     let started = Instant::now();
-    let outcome =
-        tauri::async_runtime::spawn_blocking(move || invoke_action(&handle, &call_target, parsed))
-            .await
-            .map_err(|error| format!("задача вызова прервана: {error}"))??;
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let selection = Arc::new(Mutex::new(selection_service()));
+        invoke_action(&handle, &call_target, parsed, selection, context)
+    })
+    .await
+    .map_err(|error| format!("задача вызова прервана: {error}"))??;
     let last = LastResult {
         message: outcome.message.clone(),
         module_id: outcome.module_id.clone(),
@@ -2937,6 +3034,20 @@ mod tests {
         }));
         assert!(!marker.exists(), "построение меню запустило процесс");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removing_package_drops_only_its_saved_shortcuts() {
+        let mut map = BTreeMap::from([
+            ("org.test.one/run".to_owned(), vec!["Ctrl+Alt+1".to_owned()]),
+            (
+                "org.test.two/ping".to_owned(),
+                vec!["Ctrl+Alt+2".to_owned()],
+            ),
+        ]);
+        drop_module_shortcuts(&mut map, "org.test.one");
+        assert!(!map.contains_key("org.test.one/run"));
+        assert!(map.contains_key("org.test.two/ping"));
     }
 
     #[test]

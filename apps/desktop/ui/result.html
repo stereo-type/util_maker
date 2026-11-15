@@ -65,8 +65,8 @@
           status.textContent = progress ? "Перевод…" : result.status === "ok" ? "Успех" : warning ? "Требует действия" : "Ошибка";
           status.className = "status" + (progress || result.status === "ok" ? "" : warning ? " warning" : " error");
           document.getElementById("meta").textContent =
-            `${result.actionName} · источник: ${result.source} · ядро: ${result.coreElapsedMs} мс · ` +
-            `от события до окна: ${result.sinceEventMs} мс`;
+            `${result.moduleId} · ${result.actionName} · источник: ${result.source} · ` +
+            `ядро: ${result.coreElapsedMs} мс · от события до окна: ${result.sinceEventMs} мс`;
           const copy = document.getElementById("copy");
           copy.hidden = result.status !== "ok";
           document.getElementById("close").hidden = progress;

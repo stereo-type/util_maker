@@ -21,7 +21,7 @@ Unicode true
 !include "LogicLib.nsh"
 
 !ifndef VERSION
-    !define VERSION "0.4.29"
+    !define VERSION "0.4.30"
 !endif
 !ifndef BUILD_KIND
     !define BUILD_KIND "dev"
@@ -126,6 +126,9 @@ previous_removed:
     SetOutPath "$INSTDIR\modules\org.utilmaker.control\assets"
     File "${MODULE_ICON}"
 
+    ; Пакеты прошлых версий не должны оставаться в каталоге поставки:
+    ; иначе хост при старте пытается ставить устаревшие и битые архивы.
+    RMDir /r "$INSTDIR\packages"
     SetOutPath "$INSTDIR\packages"
     File "${PACKAGE_DIR}\*.umpkg"
     File "${PACKAGE_DIR}\keys\org.utilmaker-public.json"

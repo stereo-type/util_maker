@@ -9,12 +9,12 @@
 use serde_json::{json, Value};
 use util_maker_providers::ReqwestTransport;
 use util_maker_sdk::{
-    error_codes, run_stdio, HostBridge, HostCallError, InvokeRequest, InvokeResult, Module,
-    ModuleInfo, RpcError, HOST_API_VERSION,
+    error_codes, run_stdio, FormCommandRequest, FormCommandResult, FormFieldError, HostBridge,
+    HostCallError, InvokeRequest, InvokeResult, Module, ModuleInfo, RpcError, HOST_API_VERSION,
 };
 use util_maker_translator::service::{
-    translate_from_source, CLIPBOARD_CAPABILITY, SECRET_CAPABILITY, SELECTION_CAPABILITY,
-    SETTINGS_CAPABILITY,
+    check_active_profile, translate_from_source, CLIPBOARD_CAPABILITY, SECRET_CAPABILITY,
+    SELECTION_CAPABILITY, SETTINGS_CAPABILITY,
 };
 use util_maker_translator::{BlockReason, SelectionController, SourceSnapshot, StartOutcome};
 
@@ -142,6 +142,49 @@ impl Module for TranslatorModule {
             Err(error) if error.rpc_code() == error_codes::CAPABILITY_DENIED => {
                 self.invoke(request)
             }
+            Err(error) => Err(error.into_rpc_error()),
+        }
+    }
+
+    fn command_with_host(
+        &mut self,
+        request: &FormCommandRequest,
+        host: &mut dyn HostBridge,
+    ) -> Result<FormCommandResult, RpcError> {
+        if request.command_id != "testConnection" {
+            return Err(RpcError::new(
+                error_codes::METHOD_NOT_FOUND,
+                format!("неизвестная команда формы: {}", request.command_id),
+            ));
+        }
+        let transport = self.transport.as_ref().ok_or_else(|| {
+            RpcError::new(
+                error_codes::INTERNAL_ERROR,
+                "HTTP-транспорт переводчика недоступен",
+            )
+        })?;
+        match check_active_profile(host, transport) {
+            Ok(Ok(())) => Ok(FormCommandResult {
+                message: Some("Подключение установлено.".to_owned()),
+                data: Some(json!({"connected": true})),
+                field_errors: Vec::new(),
+            }),
+            Ok(Err(error)) => Ok(FormCommandResult {
+                message: Some(error.to_string()),
+                data: Some(json!({
+                    "connected": false,
+                    "reason": error.code(),
+                })),
+                field_errors: vec![FormFieldError {
+                    field_id: "apiKey".to_owned(),
+                    code: error.code().to_owned(),
+                    message: error.to_string(),
+                }],
+            }),
+            Err(HostCallError::Cancelled) => Err(RpcError::new(
+                error_codes::CANCELLED,
+                "проверка подключения отменена",
+            )),
             Err(error) => Err(error.into_rpc_error()),
         }
     }

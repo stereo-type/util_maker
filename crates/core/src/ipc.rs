@@ -212,6 +212,34 @@ impl ModuleProcess {
             .map_err(|error| CoreError::Protocol(format!("ответ команды формы: {error}")))
     }
 
+    /// Выполняет команду формы с доступом к возможностям хоста. Нужна
+    /// командам, которые проверяют сохранённый ключ через `secret.read`.
+    pub fn form_command_with_host(
+        &mut self,
+        request: &FormCommandRequest,
+        timeout: Duration,
+        host: &mut dyn HostHandler,
+        capabilities: &[String],
+    ) -> Result<FormCommandResult, CoreError> {
+        let params = serde_json::to_value(request)
+            .map_err(|error| CoreError::Protocol(format!("команда формы: {error}")))?;
+        let id = self.next_id();
+        self.send_value(&json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": "command",
+            "params": params,
+        }))?;
+        let context = HostCallContext::new(
+            self.module_id.clone().unwrap_or_default(),
+            format!("command:{}", request.command_id),
+            capabilities.to_vec(),
+        );
+        let value = self.wait_result(id, "command", timeout, None, host, &context)?;
+        serde_json::from_value(value)
+            .map_err(|error| CoreError::Protocol(format!("ответ команды формы: {error}")))
+    }
+
     pub fn invoke(
         &mut self,
         call_id: &str,

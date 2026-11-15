@@ -21,7 +21,7 @@ Unicode true
 !include "LogicLib.nsh"
 
 !ifndef VERSION
-    !define VERSION "0.4.23"
+    !define VERSION "0.4.24"
 !endif
 !ifndef BUILD_KIND
     !define BUILD_KIND "dev"
@@ -137,7 +137,9 @@ Section "Util Maker" SEC_MAIN
     StrCmp $0 "$INSTDIR" previous_removed
     IfFileExists "$0\uninstall.exe" 0 previous_removed
     ExecWait '"$0\uninstall.exe" /S _?=$0' $1
-    Sleep 400
+    ; Старый деинсталлятор запускает удаление асинхронно; даём ему завершить
+    ; удаление, иначе он снесёт только что установленный control-модуль.
+    Sleep 2500
     Delete "$0\uninstall.exe"
     RMDir "$0"
 previous_removed:

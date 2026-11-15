@@ -153,6 +153,9 @@
         box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
       }
       .modal h2 { margin: 0 0 6px; }
+      .plugin-modal { width: min(760px, 94vw); }
+      .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .modal-head h2 { margin: 0; }
       footer { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
       .muted { color: var(--muted); }
     </style>
@@ -167,12 +170,19 @@
       <section class="card" aria-labelledby="plugins-title">
         <h2 id="plugins-title">Микроприложения</h2>
         <div id="plugin-list" role="list">Загрузка…</div>
-        <div id="plugin-detail" hidden>
-          <h3>Действия</h3>
-          <input id="shortcut-search" class="hotkey-input" type="search" placeholder="Поиск по действию или сочетанию" aria-label="Поиск действий" />
-          <div id="plugin-actions"></div>
-          <div id="plugin-settings"></div>
-          <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
+        <div id="plugin-detail" class="modal-backdrop" hidden>
+          <section class="modal plugin-modal" role="dialog" aria-modal="true" aria-labelledby="plugin-title">
+            <div class="modal-head">
+              <h2 id="plugin-title"></h2>
+              <button id="plugin-close" type="button">Закрыть</button>
+            </div>
+            <p class="hint" id="plugin-meta"></p>
+            <h3>Действия</h3>
+            <input id="shortcut-search" class="hotkey-input" type="search" placeholder="Поиск по действию или сочетанию" aria-label="Поиск действий" />
+            <div id="plugin-actions"></div>
+            <div id="plugin-settings"></div>
+            <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
+          </section>
         </div>
       </section>
 
@@ -252,6 +262,9 @@
       const elements = {
         list: document.getElementById("plugin-list"),
         detail: document.getElementById("plugin-detail"),
+        pluginTitle: document.getElementById("plugin-title"),
+        pluginMeta: document.getElementById("plugin-meta"),
+        pluginClose: document.getElementById("plugin-close"),
         actions: document.getElementById("plugin-actions"),
         settings: document.getElementById("plugin-settings"),
         search: document.getElementById("shortcut-search"),
@@ -275,6 +288,7 @@
       };
       let plugins = [];
       let currentPlugin = null;
+      let pluginTrigger = null;
       let hotkeyTarget = null;
       let hotkeyTrigger = null;
 
@@ -338,7 +352,7 @@
           const open = document.createElement("button");
           open.type = "button";
           open.textContent = "Открыть";
-          open.addEventListener("click", () => openPlugin(plugin));
+          open.addEventListener("click", () => openPlugin(plugin, open));
           right.append(toggle, badge, open);
           row.setAttribute("role", "listitem");
           row.append(info, right);
@@ -578,11 +592,17 @@
         elements.settings.append(title, form, actions);
       }
 
-      function openPlugin(plugin) {
+      function openPlugin(plugin, trigger) {
         currentPlugin = plugin;
+        if (trigger) pluginTrigger = trigger;
         elements.detail.hidden = false;
+        elements.pluginTitle.textContent = plugin.name;
+        elements.pluginMeta.textContent = plugin.installed
+          ? `${plugin.publisher} · версия ${plugin.version} · ${plugin.status}`
+          : "Пакет не установлен";
         elements.actions.innerHTML = "";
         if (elements.search) elements.search.value = "";
+        elements.pluginClose.focus();
         if (!plugin.installed) {
           showResult("Пакет отсутствует в установленной поставке.", "");
           return;
@@ -606,6 +626,13 @@
         elements.actions.append(packageActions);
       }
 
+      function closePlugin() {
+        elements.detail.hidden = true;
+        currentPlugin = null;
+        if (pluginTrigger) pluginTrigger.focus();
+        pluginTrigger = null;
+      }
+
       async function loadPlugins() {
         try {
           plugins = await invoke("plugins");
@@ -615,8 +642,7 @@
             if (refreshed) {
               openPlugin(refreshed);
             } else {
-              currentPlugin = null;
-              elements.detail.hidden = true;
+              closePlugin();
             }
           }
         } catch (error) {
@@ -766,13 +792,34 @@
           first.focus();
         }
       });
+      elements.pluginClose.addEventListener("click", closePlugin);
+      elements.detail.addEventListener("click", (event) => {
+        if (event.target === elements.detail) closePlugin();
+      });
+      elements.detail.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab") return;
+        const focusable = elements.detail.querySelectorAll(
+          'button:not([disabled]), input:not([disabled]), [href], select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first.focus();
+        }
+      });
+
       document.getElementById("hotkey-save").addEventListener("click", saveHotkey);
       document.getElementById("hotkey-cancel").addEventListener("click", closeHotkey);
       elements.modal.addEventListener("click", (event) => {
         if (event.target === elements.modal) closeHotkey();
       });
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !elements.modal.hidden) closeHotkey();
+        if (event.key !== "Escape") return;
+        if (!elements.modal.hidden) closeHotkey();
+        else if (!elements.detail.hidden) closePlugin();
       });
 
       function packageArgs() {
@@ -846,8 +893,7 @@
         if (!window.confirm(`Удалить пакет ${plugin.name}?`)) return;
         try {
           await invoke("remove_package", { pluginId: plugin.id });
-          currentPlugin = null;
-          elements.detail.hidden = true;
+          closePlugin();
           await loadPlugins();
         } catch (error) {
           showResult(`Не удалось удалить: ${error}`, "error");

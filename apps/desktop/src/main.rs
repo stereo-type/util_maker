@@ -719,6 +719,9 @@ fn main() {
             app.manage(runtime);
             app.manage(HotkeyDemo::new());
             setup_tray(app)?;
+            if let Err(error) = bootstrap_bundled_packages(app.handle()) {
+                logging::write(&format!("пакетная поставка: {error}"));
+            }
             set_shortcut_status(app.handle(), &status);
             sync_action_hotkeys(app.handle());
             if app
@@ -762,6 +765,61 @@ fn main() {
             api.prevent_exit();
         }
     });
+}
+
+#[derive(serde::Deserialize)]
+struct BundledPublicKey {
+    publisher: String,
+    public_key: String,
+}
+
+/// Устанавливает подписанные пакеты, поставленные вместе с установщиком.
+fn bootstrap_bundled_packages(app: &AppHandle) -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let Some(directory) = executable.parent().map(|parent| parent.join("packages")) else {
+        return Ok(());
+    };
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    let data_directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?;
+    let marker = data_directory.join("bundled-packages-v1");
+    if marker.exists() {
+        return Ok(());
+    }
+    let key_path = directory.join("org.utilmaker-public.json");
+    let key: BundledPublicKey = serde_json::from_slice(
+        &std::fs::read(&key_path).map_err(|error| format!("ключ поставки: {error}"))?,
+    )
+    .map_err(|error| format!("ключ поставки: {error}"))?;
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    let mut manager = state.packages.lock().map_err(|error| error.to_string())?;
+    let mut installed = Vec::new();
+    for entry in std::fs::read_dir(&directory).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("umpkg") {
+            continue;
+        }
+        match manager.install(&path, &key.publisher, &key.public_key) {
+            Ok(module) => installed.push(module.id),
+            Err(error) => logging::write(&format!("пакет поставки {}: {error}", path.display())),
+        }
+    }
+    drop(manager);
+    if !installed.is_empty() {
+        state.catalog.refresh();
+        let _ = refresh_plugins_inner(app);
+        let _ = std::fs::write(
+            marker,
+            serde_json::to_vec_pretty(&installed).unwrap_or_default(),
+        );
+    }
+    Ok(())
 }
 
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {

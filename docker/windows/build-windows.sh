@@ -44,6 +44,50 @@ fi
 out="/workspace/dist/UtilMaker-Setup-$version-$build_kind.exe"
 rm -f "$out"
 
+package_dir=/workspace/dist/packages
+mkdir -p "$package_dir/keys" "$package_dir/staging"
+private_key="$package_dir/keys/org.utilmaker-private.json"
+public_key="$package_dir/keys/org.utilmaker-public.json"
+if [ ! -f "$private_key" ]; then
+    echo "Генерация ключа издателя для штатных пакетов"
+    cargo run --quiet -p util-maker-packages --bin util-maker-package -- keygen \
+        --publisher org.utilmaker \
+        --private-key "$private_key" \
+        --public-key "$public_key"
+fi
+
+package_plugin() {
+    plugin_id=$1
+    plugin_exe=$2
+    plugin_manifest=$3
+    plugin_icon=$4
+    stage="$package_dir/staging/$plugin_id"
+    rm -rf "$stage"
+    mkdir -p "$stage/assets"
+    cp "$plugin_exe" "$stage/"
+    cp "$plugin_manifest" "$stage/manifest.json"
+    if [ -n "$plugin_icon" ] && [ -f "$plugin_icon" ]; then
+        cp "$plugin_icon" "$stage/assets/icon.png"
+    fi
+    output="$package_dir/$plugin_id-$version-windows-x64.umpkg"
+    cargo run --quiet -p util-maker-packages --bin util-maker-package -- export \
+        --source "$stage" \
+        --manifest "$plugin_manifest" \
+        --output "$output" \
+        --private-key "$private_key" \
+        --platform windows-x64
+    cargo run --quiet -p util-maker-packages --bin util-maker-package -- verify \
+        --package "$output" \
+        --public-key "$public_key" \
+        --platform windows-x64 \
+        --host-api 1.0.0 >/dev/null
+}
+
+package_plugin org.utilmaker.screenshot "$screenshot_module" "$screenshot_manifest" /workspace/plugins/screenshot/assets/icon.png
+package_plugin org.utilmaker.translator "$translator_module" "$translator_manifest" ""
+
+rm -rf "$package_dir/staging"
+
 makensis -V2 \
     -DVERSION="$version" \
     -DBUILD_KIND="$build_kind" \
@@ -51,14 +95,12 @@ makensis -V2 \
     -DMODULE_EXE="$module" \
     -DMODULE_MANIFEST="$manifest" \
     -DMODULE_ICON=/workspace/plugins/control/assets/icon.png \
-    -DSCREENSHOT_EXE="$screenshot_module" \
-    -DSCREENSHOT_MANIFEST="$screenshot_manifest" \
-    -DSCREENSHOT_ICON=/workspace/plugins/screenshot/assets/icon.png \
-    -DTRANSLATOR_EXE="$translator_module" \
-    -DTRANSLATOR_MANIFEST="$translator_manifest" \
+    -DPACKAGE_DIR="$package_dir" \
     -DREADME_FILE=/workspace/installer/README.txt \
     -DOUT_FILE="$out" \
     /workspace/installer/util-maker.nsi
+
+
 
 if [ ! -f "$out" ]; then
     echo "NSIS не создал установщик $out" >&2

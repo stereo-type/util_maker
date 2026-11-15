@@ -8,8 +8,7 @@
 ;   MODULE_EXE       — control-module.exe
 ;   MODULE_MANIFEST  — manifest.json контрольного модуля
 ;   MODULE_ICON      — иконка модуля из assets
-;   SCREENSHOT_EXE, SCREENSHOT_MANIFEST, SCREENSHOT_ICON — плагин «Скриншоты»
-;   TRANSLATOR_EXE, TRANSLATOR_MANIFEST — плагин «Переводчик»
+;   PACKAGE_DIR      — подписанные .umpkg и открытый ключ издателя
 ;   README_FILE      — краткая инструкция
 ;   OUT_FILE         — путь к итоговому .exe
 ;   VERSION          — версия продукта
@@ -36,20 +35,8 @@ Unicode true
 !ifndef MODULE_ICON
     !error "Не задан MODULE_ICON"
 !endif
-!ifndef SCREENSHOT_EXE
-    !error "Не задан SCREENSHOT_EXE"
-!endif
-!ifndef SCREENSHOT_MANIFEST
-    !error "Не задан SCREENSHOT_MANIFEST"
-!endif
-!ifndef SCREENSHOT_ICON
-    !error "Не задан SCREENSHOT_ICON"
-!endif
-!ifndef TRANSLATOR_EXE
-    !error "Не задан TRANSLATOR_EXE"
-!endif
-!ifndef TRANSLATOR_MANIFEST
-    !error "Не задан TRANSLATOR_MANIFEST"
+!ifndef PACKAGE_DIR
+    !error "Не задан PACKAGE_DIR"
 !endif
 !ifndef README_FILE
     !error "Не задан README_FILE"
@@ -120,15 +107,9 @@ previous_removed:
     SetOutPath "$INSTDIR\modules\org.utilmaker.control\assets"
     File "${MODULE_ICON}"
 
-    SetOutPath "$INSTDIR\modules\org.utilmaker.screenshot"
-    File "${SCREENSHOT_EXE}"
-    File "${SCREENSHOT_MANIFEST}"
-    SetOutPath "$INSTDIR\modules\org.utilmaker.screenshot\assets"
-    File "${SCREENSHOT_ICON}"
-
-    SetOutPath "$INSTDIR\modules\org.utilmaker.translator"
-    File "${TRANSLATOR_EXE}"
-    File "${TRANSLATOR_MANIFEST}"
+    SetOutPath "$INSTDIR\packages"
+    File "${PACKAGE_DIR}\*.umpkg"
+    File "${PACKAGE_DIR}\keys\org.utilmaker-public.json"
 
     SetOutPath "$INSTDIR"
     CreateShortCut "$DESKTOP\Util Maker.lnk" "$INSTDIR\util-maker-desktop.exe"
@@ -167,14 +148,9 @@ Section "Uninstall"
     Delete "$INSTDIR\modules\org.utilmaker.control\assets\icon.png"
     RMDir "$INSTDIR\modules\org.utilmaker.control\assets"
     RMDir "$INSTDIR\modules\org.utilmaker.control"
-    Delete "$INSTDIR\modules\org.utilmaker.screenshot\screenshot-plugin.exe"
-    Delete "$INSTDIR\modules\org.utilmaker.screenshot\manifest.json"
-    Delete "$INSTDIR\modules\org.utilmaker.screenshot\assets\icon.png"
-    RMDir "$INSTDIR\modules\org.utilmaker.screenshot\assets"
-    RMDir "$INSTDIR\modules\org.utilmaker.screenshot"
-    Delete "$INSTDIR\modules\org.utilmaker.translator\translator-module.exe"
-    Delete "$INSTDIR\modules\org.utilmaker.translator\manifest.json"
-    RMDir "$INSTDIR\modules\org.utilmaker.translator"
+    Delete "$INSTDIR\packages\*.umpkg"
+    Delete "$INSTDIR\packages\org.utilmaker-public.json"
+    RMDir "$INSTDIR\packages"
     RMDir "$INSTDIR\modules"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"

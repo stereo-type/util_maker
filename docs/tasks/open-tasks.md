@@ -9,7 +9,7 @@
 | [Переводчик](blocks/plugins/translator/README.md) | Не сделано | 2 |
 | [Переводчик](blocks/plugins/translator/README.md) | На ревью | 1 |
 | [Desktop-хост](blocks/desktop/README.md) | Не сделано | 2 |
-| [Desktop-хост](blocks/desktop/README.md) | На ревью | 1 |
+| [Desktop-хост](blocks/desktop/README.md) | На ревью | 3 |
 | [Контрольный плагин](blocks/plugins/control/README.md) | Не сделано | 1 |
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | Не сделано | 1 |
 | [Текст с экрана](blocks/plugins/screen-ocr/README.md) | Не сделано | 2 |

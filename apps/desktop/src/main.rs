@@ -414,8 +414,16 @@ impl ShortcutRuntime {
     fn start(app: &AppHandle) -> Result<(Self, Receiver<HotkeyEvent>), String> {
         let mut service = HotkeyService::start()?;
         let events = service.take_events();
-        let combo = persisted_shortcut(app).unwrap_or_else(|| CONTROL_SHORTCUT.to_owned());
-        let (registered, status) = register_shortcut(&service, &combo);
+        let persisted = persisted_state(app);
+        let combo = persisted
+            .shortcut
+            .unwrap_or_else(|| CONTROL_SHORTCUT.to_owned());
+        let paused = persisted.paused;
+        let (registered, status) = if paused {
+            (false, "на паузе".to_owned())
+        } else {
+            register_shortcut(&service, &combo)
+        };
         let registrations = BTreeMap::from([(
             HOTKEY_ID,
             Registration {
@@ -427,7 +435,7 @@ impl ShortcutRuntime {
             Self {
                 service: Mutex::new(service),
                 combo: Mutex::new(combo),
-                paused: AtomicBool::new(false),
+                paused: AtomicBool::new(paused),
                 registered: AtomicBool::new(registered),
                 status: Mutex::new(status),
                 registrations: Mutex::new(registrations),
@@ -632,6 +640,25 @@ fn sync_action_hotkeys(app: &AppHandle) {
                 continue;
             }
             let id = runtime.next_id.fetch_add(1, Ordering::SeqCst);
+            if runtime.paused.load(Ordering::SeqCst) {
+                if let Ok(mut registrations) = runtime.registrations.lock() {
+                    registrations.insert(
+                        id,
+                        Registration {
+                            combo: combo.clone(),
+                            target: ActionRef::new(
+                                action.module_id.clone(),
+                                action.action_id.clone(),
+                            ),
+                        },
+                    );
+                }
+                logging::write(&format!(
+                    "сочетание {combo}: {} / {} (на паузе)",
+                    action.module_id, action.action_id
+                ));
+                continue;
+            }
             let registered = {
                 let service = runtime.service.lock().expect("служба сочетаний");
                 service.register(&combo, id).is_ok()
@@ -796,15 +823,12 @@ fn main() {
                 .is_some_and(|entry| !entry.enabled)
             {
                 if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
-                    runtime
-                        .service
-                        .lock()
-                        .expect("служба сочетаний")
-                        .unregister(HOTKEY_ID);
+                    runtime.unregister_all();
                     runtime.registered.store(false, Ordering::SeqCst);
                     runtime.paused.store(true, Ordering::SeqCst);
                 }
                 set_shortcut_status(app.handle(), "отключён");
+                refresh_tray_menu(app.handle());
             }
             spawn_hotkey_listener(app.handle().clone(), events);
             spawn_session_watchdog(app.handle().clone());
@@ -908,27 +932,27 @@ fn bootstrap_bundled_packages(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn tray_state_icon(paused: bool) -> Image<'static> {
-    let bytes = if paused {
-        include_bytes!("../icons/tray-paused.png").as_slice()
-    } else {
-        include_bytes!("../icons/tray-working.png").as_slice()
-    };
-    Image::from_bytes(bytes).expect("иконка состояния трея")
-}
-
-fn update_tray_state(app: &AppHandle, paused: bool) {
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_icon(Some(tray_state_icon(paused)));
-    }
-}
-
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let icon = tray_state_icon(false);
+    let (icon_bytes, tooltip) = app
+        .try_state::<ShortcutRuntime>()
+        .map(|runtime| {
+            tray_visual(
+                runtime.paused.load(Ordering::SeqCst),
+                runtime.registered.load(Ordering::SeqCst),
+                &runtime.status.lock().expect("статус сочетания"),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                include_bytes!("../icons/status-error.png").as_slice(),
+                "Util Maker — состояние неизвестно".to_owned(),
+            )
+        });
+    let icon = Image::from_bytes(icon_bytes)?;
 
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .tooltip("Util Maker — прототип")
+        .tooltip(tooltip)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "settings" => {
@@ -1015,6 +1039,7 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
         .try_state::<AppState>()
         .map(|state| state.catalog.registry.actions())
         .unwrap_or_default();
+    let paused = shortcut_paused(app);
     let menu = Menu::new(app).map_err(|error| format!("меню трея: {error}"))?;
     let settings = IconMenuItem::with_id(
         app,
@@ -1071,7 +1096,7 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
     )
     .map_err(|error| format!("меню трея: {error}"))?;
     for (id, label) in [
-        ("pause", "Пауза / возобновить сочетание"),
+        ("pause", pause_menu_label(paused)),
         ("retry", "Перерегистрировать сочетание"),
         ("quit", "Выход"),
     ] {
@@ -1795,30 +1820,51 @@ fn set_shortcut_status(app: &AppHandle, status: &str) {
     apply_tray_state(app);
 }
 
+fn shortcut_paused(app: &AppHandle) -> bool {
+    app.try_state::<ShortcutRuntime>()
+        .is_some_and(|runtime| runtime.paused.load(Ordering::SeqCst))
+}
+
+fn pause_menu_label(paused: bool) -> &'static str {
+    if paused {
+        "Возобновить сочетание"
+    } else {
+        "Пауза сочетания"
+    }
+}
+
+fn tray_visual(paused: bool, registered: bool, status: &str) -> (&'static [u8], String) {
+    if paused {
+        (
+            include_bytes!("../icons/tray-paused.png").as_slice(),
+            "Util Maker — на паузе".to_owned(),
+        )
+    } else if registered {
+        (
+            include_bytes!("../icons/tray-working.png").as_slice(),
+            "Util Maker — работает".to_owned(),
+        )
+    } else {
+        (
+            include_bytes!("../icons/status-error.png").as_slice(),
+            format!("Util Maker — сочетание недоступно: {status}"),
+        )
+    }
+}
+
 fn apply_tray_state(app: &AppHandle) {
     let (icon, tooltip) = if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
-        if runtime.paused.load(Ordering::SeqCst) {
-            (
-                include_bytes!("../icons/status-paused.png").as_slice(),
-                "Util Maker — на паузе".to_owned(),
-            )
-        } else if runtime.registered.load(Ordering::SeqCst) {
-            (
-                include_bytes!("../icons/status-active.png").as_slice(),
-                "Util Maker — работает".to_owned(),
-            )
-        } else {
-            let status = runtime
-                .status
-                .lock()
-                .ok()
-                .map(|value| value.clone())
-                .unwrap_or_default();
-            (
-                include_bytes!("../icons/status-error.png").as_slice(),
-                format!("Util Maker — сочетание недоступно: {status}"),
-            )
-        }
+        let status = runtime
+            .status
+            .lock()
+            .ok()
+            .map(|value| value.clone())
+            .unwrap_or_default();
+        tray_visual(
+            runtime.paused.load(Ordering::SeqCst),
+            runtime.registered.load(Ordering::SeqCst),
+            &status,
+        )
     } else {
         (
             include_bytes!("../icons/status-error.png").as_slice(),
@@ -1833,6 +1879,12 @@ fn apply_tray_state(app: &AppHandle) {
     }
 }
 
+fn refresh_tray_menu(app: &AppHandle) {
+    if let Err(error) = rebuild_tray_menu(app) {
+        logging::write(&format!("обновление меню трея: {error}"));
+    }
+}
+
 fn toggle_shortcut_pause(app: &AppHandle) {
     logging::debug("меню: переключение паузы сочетания");
     let Some(runtime) = app.try_state::<ShortcutRuntime>() else {
@@ -1843,20 +1895,22 @@ fn toggle_shortcut_pause(app: &AppHandle) {
         runtime.registered.store(registered, Ordering::SeqCst);
         if registered {
             runtime.paused.store(false, Ordering::SeqCst);
+            save_paused(app, false);
             set_shortcut_status(app, "зарегистрировано");
         } else {
+            save_paused(app, true);
             set_shortcut_status(app, "занято другой программой");
         }
-        update_tray_state(app, false);
     } else {
         // Сначала закрываем обработку событий, затем освобождаем регистрации:
         // иначе уже поставленное в очередь WM_HOTKEY успеет вызвать действие.
         runtime.paused.store(true, Ordering::SeqCst);
         runtime.unregister_all();
         runtime.registered.store(false, Ordering::SeqCst);
+        save_paused(app, true);
         set_shortcut_status(app, "на паузе");
-        update_tray_state(app, true);
     }
+    refresh_tray_menu(app);
 }
 
 fn retry_shortcut(app: &AppHandle) {
@@ -1866,10 +1920,12 @@ fn retry_shortcut(app: &AppHandle) {
     };
     if runtime.paused.load(Ordering::SeqCst) {
         set_shortcut_status(app, "на паузе");
+        refresh_tray_menu(app);
         return;
     }
     if runtime.registered.load(Ordering::SeqCst) {
         set_shortcut_status(app, "уже зарегистрировано");
+        refresh_tray_menu(app);
         return;
     }
     runtime.unregister_all();
@@ -1877,10 +1933,12 @@ fn retry_shortcut(app: &AppHandle) {
     runtime.registered.store(registered, Ordering::SeqCst);
     if registered {
         runtime.paused.store(false, Ordering::SeqCst);
+        save_paused(app, false);
         set_shortcut_status(app, "зарегистрировано");
     } else {
         set_shortcut_status(app, "занято другой программой");
     }
+    refresh_tray_menu(app);
 }
 
 /// Ключ платформы в манифесте пакета.
@@ -2236,37 +2294,34 @@ fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Resul
                 "отключён"
             }
         ));
-        if !enabled {
+        if !enabled && plugin_id != CONTROL_MODULE_ID {
             if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
                 runtime.remove_module(&plugin_id);
             }
         }
         if plugin_id == CONTROL_MODULE_ID {
             if let Some(runtime) = app.try_state::<ShortcutRuntime>() {
-                let service = runtime.service.lock().expect("служба сочетаний");
                 if enabled {
-                    let combo = runtime.combo.lock().expect("сочетание").clone();
-                    if let Err(error) = service.register(&combo, HOTKEY_ID) {
-                        drop(service);
+                    let registered = runtime.register_all();
+                    runtime.registered.store(registered, Ordering::SeqCst);
+                    if !registered {
+                        runtime.unregister_all();
+                        runtime.registered.store(false, Ordering::SeqCst);
+                        runtime.paused.store(true, Ordering::SeqCst);
+                        save_paused(&app, true);
                         let _ = state.catalog.registry.set_enabled(&plugin_id, false);
-                        return Err(register_failure_message(error));
+                        set_shortcut_status(&app, "занято другой программой");
+                        refresh_tray_menu(&app);
+                        return Err(register_failure_message(RegisterFailure::Occupied));
                     }
-                    runtime.registered.store(true, Ordering::SeqCst);
-                    drop(service);
-                    if let Ok(mut registrations) = runtime.registrations.lock() {
-                        registrations.insert(
-                            HOTKEY_ID,
-                            Registration {
-                                combo,
-                                target: control_action_ref(),
-                            },
-                        );
-                    }
+                    runtime.paused.store(false, Ordering::SeqCst);
+                    save_paused(&app, false);
                     set_shortcut_status(&app, "зарегистрировано");
                 } else {
-                    service.unregister(HOTKEY_ID);
+                    runtime.unregister_all();
                     runtime.registered.store(false, Ordering::SeqCst);
-                    drop(service);
+                    runtime.paused.store(true, Ordering::SeqCst);
+                    save_paused(&app, true);
                     set_shortcut_status(&app, "отключён");
                 }
             }
@@ -2401,7 +2456,9 @@ fn change_action_shortcut(
                 *runtime.combo.lock().expect("сочетание") = normalized.clone();
                 runtime.registered.store(true, Ordering::SeqCst);
                 runtime.paused.store(false, Ordering::SeqCst);
+                save_paused(&app, false);
                 set_shortcut_status(&app, "зарегистрировано");
+                refresh_tray_menu(&app);
                 save_shortcut(&app, &normalized);
             }
             Ok(normalized)
@@ -2625,7 +2682,9 @@ fn change_control_shortcut(
             state.registered.store(true, Ordering::SeqCst);
             state.paused.store(false, Ordering::SeqCst);
             drop(service);
+            save_paused(&app, false);
             set_shortcut_status(&app, "зарегистрировано");
+            refresh_tray_menu(&app);
             save_shortcut(&app, &normalized);
             save_action_shortcut(&app, CONTROL_MODULE_ID, CONTROL_ACTION_ID, &normalized);
             Ok(normalized)
@@ -3044,6 +3103,8 @@ struct PersistedState {
     first_run_done: bool,
     #[serde(default)]
     shortcut: Option<String>,
+    #[serde(default)]
+    paused: bool,
 }
 
 fn persisted_state(app: &AppHandle) -> PersistedState {
@@ -3054,8 +3115,15 @@ fn persisted_state(app: &AppHandle) -> PersistedState {
         .unwrap_or_default()
 }
 
-fn persisted_shortcut(app: &AppHandle) -> Option<String> {
-    persisted_state(app).shortcut
+fn save_paused(app: &AppHandle, paused: bool) {
+    let Ok(path) = state_path(app) else {
+        return;
+    };
+    let mut state = persisted_state(app);
+    state.paused = paused;
+    if let Ok(text) = serde_json::to_string_pretty(&state) {
+        let _ = std::fs::write(path, text);
+    }
 }
 
 fn save_shortcut(app: &AppHandle, combo: &str) {
@@ -3274,5 +3342,48 @@ mod tests {
             assert_ne!(bytes, app_icon, "{name} повторяет логотип приложения");
         }
         assert_ne!(screenshot, translator, "иконки микроприложений совпадают");
+    }
+
+    #[test]
+    fn pause_menu_label_reflects_tray_state() {
+        assert_eq!(pause_menu_label(false), "Пауза сочетания");
+        assert_eq!(pause_menu_label(true), "Возобновить сочетание");
+    }
+
+    #[test]
+    fn tray_visual_switches_icon_and_tooltip_by_state() {
+        let (active_icon, active_tip) = tray_visual(false, true, "зарегистрировано");
+        assert_eq!(
+            active_icon,
+            include_bytes!("../icons/tray-working.png").as_slice()
+        );
+        assert!(active_tip.contains("работает"));
+
+        let (paused_icon, paused_tip) = tray_visual(true, true, "на паузе");
+        assert_eq!(
+            paused_icon,
+            include_bytes!("../icons/tray-paused.png").as_slice()
+        );
+        assert!(paused_tip.contains("на паузе"));
+
+        let (error_icon, error_tip) = tray_visual(false, false, "занято");
+        assert_eq!(
+            error_icon,
+            include_bytes!("../icons/status-error.png").as_slice()
+        );
+        assert!(error_tip.contains("недоступно"));
+    }
+
+    #[test]
+    fn persisted_pause_is_optional_and_survives_shortcut_changes() {
+        let old: PersistedState =
+            serde_json::from_str(r#"{"shortcut":"Ctrl+Alt+1"}"#).expect("старое состояние");
+        assert!(!old.paused);
+        let paused: PersistedState = serde_json::from_str(
+            r#"{"first_run_done":true,"shortcut":"Ctrl+Alt+1","paused":true}"#,
+        )
+        .expect("состояние с паузой");
+        assert!(paused.paused);
+        assert_eq!(paused.shortcut.as_deref(), Some("Ctrl+Alt+1"));
     }
 }

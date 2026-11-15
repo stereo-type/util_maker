@@ -161,34 +161,75 @@ previous_removed:
 autostart_done:
 SectionEnd
 
+Function un.ReportLeftovers
+    ; Показываем пользователю, что именно помешало удалить каталог установки.
+    StrCpy $R0 ""
+    StrCpy $R1 0
+    FindFirst $R2 $R3 "$INSTDIR\*.*"
+    ${If} $R3 == ""
+        FindClose $R2
+        MessageBox MB_ICONSTOP|MB_OK "Не удалось удалить каталог установки: $INSTDIR. Он занят другой программой или недоступен для записи. Закройте Util Maker и повторите удаление."
+        Return
+    ${EndIf}
+    leftovers_loop:
+        StrCmp $R3 "" leftovers_done
+        StrCmp $R3 "." leftovers_next
+        StrCmp $R3 ".." leftovers_next
+        IntOp $R1 $R1 + 1
+        ${If} $R1 <= 6
+            StrCpy $R0 "$R0$\r$\n• $R3"
+        ${EndIf}
+    leftovers_next:
+        FindNext $R2 $R3
+        Goto leftovers_loop
+    leftovers_done:
+        FindClose $R2
+        ${If} $R1 > 6
+            StrCpy $R0 "$R0$\r$\n• …"
+        ${EndIf}
+        MessageBox MB_ICONSTOP|MB_OK "Каталог установки удалён не полностью: $INSTDIR$\r$\n$\r$\nНе удалось удалить:$R0$\r$\n$\r$\nЗакройте Util Maker, проверьте права и удалите оставшиеся файлы вручную."
+FunctionEnd
+
 Section "Uninstall"
+    ; Приложение могло остаться в трее и держать exe, модуль или журнал.
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM util-maker-desktop.exe'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM control-module.exe'
+    Pop $0
+    Pop $1
+    Sleep 600
+
     Delete "$DESKTOP\Util Maker.lnk"
     Delete "$SMPROGRAMS\Util Maker\Util Maker.lnk"
     Delete "$SMPROGRAMS\Util Maker\Удалить Util Maker.lnk"
     RMDir "$SMPROGRAMS\Util Maker"
 
+    ; Сначала убираем установленные каталоги целиком, затем известные файлы.
     RMDir /r "$INSTDIR\modules"
     RMDir /r "$INSTDIR\packages"
     RMDir /r "$INSTDIR\scripts"
     RMDir /r "$INSTDIR\logs"
+    ; При нестандартном каталоге установки журнал мог уйти в путь по умолчанию.
+    StrCmp "$INSTDIR" "$LOCALAPPDATA\Util Maker" uninstall_logs_done
+    RMDir /r "$LOCALAPPDATA\Util Maker\logs"
+    RMDir "$LOCALAPPDATA\Util Maker"
+    uninstall_logs_done:
     Delete "$INSTDIR\util-maker-desktop.exe"
     Delete "$INSTDIR\README.txt"
     Delete "$INSTDIR\uninstall.exe"
-    ; Сам деинсталлятор запущен из $INSTDIR и не может удалить свой файл.
-    ; Передаём удаление каталога отдельному cmd после выхода процесса.
-    SetOutPath "$TEMP"
-    FileOpen $0 "$TEMP\util-maker-cleanup.bat" w
-    FileWrite $0 "@echo off$\r$\n"
-    FileWrite $0 "timeout /t 2 /nobreak >nul$\r$\n"
-    FileWrite $0 "rmdir /s /q $\"$INSTDIR$\"$\r$\n"
-    FileWrite $0 "del $\"%~f0$\"$\r$\n"
-    FileClose $0
-    Exec '"$TEMP\util-maker-cleanup.bat"' 
     RMDir "$INSTDIR"
+
+    ; При silent-обновлении деинсталлятор запущен из $INSTDIR через _?=
+    ; и не может удалить собственный exe; его уберёт установщик.
+    StrCmp $EXEDIR $INSTDIR uninstall_registry
+    IfFileExists "$INSTDIR" 0 uninstall_registry
+    Call un.ReportLeftovers
+    uninstall_registry:
 
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "UtilMaker"
     DeleteRegKey HKCU "${UNINSTALL_KEY}"
     DeleteRegKey HKCU "Software\Util Maker"
-    ; Пользовательские настройки и журнал остаются до ручного удаления:
-    ; %LOCALAPPDATA%\org.utilmaker.prototype и %LOCALAPPDATA%\Util Maker\logs.
+    ; Профиль %LOCALAPPDATA%\org.utilmaker.prototype сохраняется до отдельного
+    ; подтверждения. Журнал входит в каталог установки и удаляется выше.
 SectionEnd

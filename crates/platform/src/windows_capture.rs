@@ -45,7 +45,7 @@ impl ScreenSource for WindowsScreen {
     }
 }
 
-fn ensure_dpi_awareness() {
+pub(crate) fn ensure_dpi_awareness() {
     DPI_AWARENESS.call_once(|| {
         // Tauri обычно уже задаёт per-monitor v2 в манифесте. Повторный вызов
         // возвращает ERROR_ACCESS_DENIED и не должен ломать захват.
@@ -217,7 +217,7 @@ fn capture_bgra(rect: FrameRegion) -> Result<RawFrame, ScreenSourceError> {
 
     // Экранный GDI-буфер обычно отдаёт нулевой альфа-канал. Фиксируем
     // непрозрачность, чтобы BGRA8 одинаково читался всеми потребителями.
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[3] = u8::MAX;
     }
     Ok(RawFrame {

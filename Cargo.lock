@@ -4739,10 +4739,13 @@ dependencies = [
 name = "util-maker-platform"
 version = "0.4.3"
 dependencies = [
+ "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "util-maker-core",
  "util-maker-sdk",
  "windows",
+ "windows-core",
  "winreg 0.52.0",
 ]
 

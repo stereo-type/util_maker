@@ -29,6 +29,36 @@ impl ProviderKind {
             Self::Google => "Google",
         }
     }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Yandex => "yandex",
+            Self::Google => "google",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "yandex" => Some(Self::Yandex),
+            "google" => Some(Self::Google),
+            _ => None,
+        }
+    }
+
+    pub fn api_key_secret_ref(self) -> &'static str {
+        match self {
+            Self::Yandex => "translator/yandex/apiKey",
+            Self::Google => "translator/google/apiKey",
+        }
+    }
+
+    pub fn from_secret_ref(value: &str) -> Option<Self> {
+        match value {
+            "translator/yandex/apiKey" => Some(Self::Yandex),
+            "translator/google/apiKey" => Some(Self::Google),
+            _ => None,
+        }
+    }
 }
 
 /// Профиль подключения. Ключ относится только к этому сервису.
@@ -106,6 +136,23 @@ pub trait HttpTransport: Send + Sync {
 }
 
 /// Ошибка перевода, различимая в интерфейсе.
+impl ProviderError {
+    /// Стабильный машинный код для ответа процесса и формы.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Unauthorized => "unauthorized",
+            Self::QuotaExceeded => "quota-exceeded",
+            Self::RateLimited => "rate-limited",
+            Self::HttpStatus(_) => "http-status",
+            Self::Network => "network",
+            Self::Timeout => "timeout",
+            Self::Cancelled => "cancelled",
+            Self::InvalidResponse(_) => "invalid-response",
+            Self::MissingProfile(_) => "missing-profile",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProviderError {
     #[error("неверный API-ключ или нет доступа")]
@@ -286,6 +333,10 @@ impl ProviderHub {
 
     pub fn active(&self) -> Option<ProviderKind> {
         self.active
+    }
+
+    pub fn profile(&self, kind: ProviderKind) -> Option<&Profile> {
+        self.profiles.get(&kind)
     }
 
     pub fn translate(

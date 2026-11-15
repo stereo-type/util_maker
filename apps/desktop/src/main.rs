@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -29,10 +29,14 @@ use util_maker_core::hotkeys::{
     HotkeyStore, Owner, RegistrationError, StoreError,
 };
 use util_maker_core::{
-    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry,
+    ActionRef, HostDispatcher, InvocationContext, InvokeOutcome, ModuleEntry, Registry, SourceRef,
 };
-use util_maker_platform::{HotkeyEvent, HotkeyService, RegisterFailure};
-use util_maker_sdk::{protocol::InvocationSource, Action, Manifest};
+use util_maker_platform::{
+    HotkeyEvent, HotkeyService, NativeHost, NativeSelection, RegisterFailure, SettingsStore,
+};
+use util_maker_sdk::{
+    protocol::InvocationSource, Action, FormState, Manifest, SettingKind, SettingsSchema,
+};
 
 const CONTROL_MODULE_ID: &str = "org.utilmaker.control";
 const CONTROL_ACTION_ID: &str = "ping";
@@ -47,6 +51,17 @@ struct AppState {
     catalog: CatalogState,
     tray_actions: Mutex<BTreeMap<String, ActionRef>>,
     metrics: Mutex<DiagnosticsLog>,
+    selection: Arc<Mutex<NativeSelection>>,
+    settings: Arc<SettingsStore>,
+    last_external: Mutex<Option<SourceRef>>,
+    pending_settings: Mutex<Option<PluginSettingsFocus>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginSettingsFocus {
+    plugin_id: String,
+    profile: Option<String>,
 }
 
 /// Каталог установленных модулей и реестр ядра.
@@ -413,11 +428,14 @@ fn register_shortcut(service: &HotkeyService, combo: &str) -> (bool, String) {
 #[serde(rename_all = "camelCase")]
 struct LastResult {
     message: String,
+    module_id: String,
+    action_id: String,
     action_name: String,
     source: String,
     core_elapsed_ms: u128,
     since_event_ms: u128,
     status: String,
+    data: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -463,17 +481,31 @@ fn main() {
             set_hotkey_save_failure,
             plugins,
             set_plugin_enabled,
+            save_plugin_settings,
+            take_pending_plugin_settings,
+            open_plugin_settings,
+            copy_text,
             change_control_shortcut,
             quit_app
         ])
         .setup(|app| {
             let metrics = DiagnosticsLog::open(&logging::log_directory(), 1_000_000)
                 .map_err(|error| format!("журнал метрик: {error}"))?;
+            let data_directory = app
+                .path()
+                .app_local_data_dir()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            let settings_root = data_directory.join("module-settings");
+            std::fs::create_dir_all(&settings_root)?;
             let state = AppState {
                 last_result: Mutex::new(None),
                 catalog: CatalogState::open(app.handle())?,
                 tray_actions: Mutex::new(BTreeMap::new()),
                 metrics: Mutex::new(metrics),
+                selection: Arc::new(Mutex::new(util_maker_platform::selection_service())),
+                settings: Arc::new(SettingsStore::new(settings_root)),
+                last_external: Mutex::new(None),
+                pending_settings: Mutex::new(None),
             };
             app.manage(state);
             let (runtime, events) = ShortcutRuntime::start(app.handle())?;
@@ -541,15 +573,23 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| match event {
+            // Правый клик открывает меню трея. Источник закрепляем до того,
+            // как меню перехватит фокус, чтобы действие из меню работало с
+            // исходным окном, а не с самим меню.
+            TrayIconEvent::Click {
+                button: MouseButton::Right,
+                button_state: MouseButtonState::Down,
+                ..
+            } => {
+                capture_external_source(tray.app_handle());
+            }
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = event
-            {
-                open_settings(tray.app_handle());
-            }
+            } => open_settings(tray.app_handle()),
+            _ => {}
         })
         .build(app)?;
     rebuild_tray_menu(app.handle()).map_err(std::io::Error::other)?;
@@ -755,10 +795,54 @@ fn action_name_for(app: &AppHandle, target: &ActionRef) -> String {
         .unwrap_or_else(|| target.action_id.clone())
 }
 
+fn capture_external_source(app: &AppHandle) -> Option<SourceRef> {
+    let state = app.try_state::<AppState>()?;
+    let mut selection = state.selection.lock().ok()?;
+    if let Some(previous) = state
+        .last_external
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+    {
+        selection.release_source(&previous);
+    }
+    match selection.capture_foreground() {
+        Ok(source) => {
+            let source_ref = source.as_ref();
+            if let Ok(mut slot) = state.last_external.lock() {
+                *slot = Some(source_ref.clone());
+            }
+            Some(source_ref)
+        }
+        Err(error) => {
+            logging::debug(&format!("источник выделения не закреплён: {error}"));
+            None
+        }
+    }
+}
+
+fn last_external_source(app: &AppHandle) -> Option<SourceRef> {
+    app.try_state::<AppState>().and_then(|state| {
+        state
+            .last_external
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+    })
+}
+
+fn invocation_context(app: &AppHandle, source: InvocationSource) -> InvocationContext {
+    match source {
+        InvocationSource::Hotkey => InvocationContext::hotkey(last_external_source(app)),
+        InvocationSource::Tray => InvocationContext::tray(last_external_source(app)),
+    }
+}
+
 fn invoke_action(
     app: &AppHandle,
     target: &ActionRef,
     source: InvocationSource,
+    params: serde_json::Value,
 ) -> Result<InvokeOutcome, String> {
     logging::debug(&format!(
         "вызов действия module={} action={} source={}",
@@ -770,14 +854,19 @@ fn invoke_action(
         .try_state::<AppState>()
         .ok_or_else(|| "каталог модулей не готов".to_owned())?;
     // Диспетчер живёт ровно один вызов: кадры и буферы освобождаются вместе
-    // с ним, а параллельные действия не блокируют друг друга на время IPC.
-    let mut host = HostDispatcher::new(util_maker_platform::screen_service());
+    // с ним, а общее хранилище источников выделения не удерживает блокировку
+    // на время IPC.
+    let mut host = HostDispatcher::new(NativeHost::new(
+        state.selection.clone(),
+        state.settings.clone(),
+    ));
     state
         .catalog
         .registry
-        .invoke_session(
+        .invoke_session_with_params(
             target,
-            InvocationContext::new(source),
+            invocation_context(app, source),
+            params,
             INVOKE_TIMEOUT,
             Some(logging::logger()),
             &mut host,
@@ -787,7 +876,7 @@ fn invoke_action(
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
     let started = Instant::now();
-    match invoke_action(app, &target, source) {
+    match invoke_action(app, &target, source, serde_json::Value::Null) {
         Ok(outcome) => {
             let since_event = started.elapsed();
             logging::write(&format!(
@@ -802,11 +891,14 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: outcome.message.clone(),
+                    module_id: outcome.module_id.clone(),
+                    action_id: outcome.action_id.clone(),
                     action_name: outcome.action_name.clone(),
                     source: source.as_str().to_owned(),
                     core_elapsed_ms: outcome.elapsed.as_millis(),
                     since_event_ms: since_event.as_millis(),
                     status: "ok".to_owned(),
+                    data: outcome.data.clone(),
                 },
             );
             let first_frame = started.elapsed().as_millis() as u64;
@@ -836,11 +928,14 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                 app,
                 LastResult {
                     message: format!("Не удалось выполнить действие: {error}"),
+                    module_id: target.module_id.clone(),
+                    action_id: target.action_id.clone(),
                     action_name: action_name_for(app, &target),
                     source: source.as_str().to_owned(),
                     core_elapsed_ms: 0,
                     since_event_ms: started.elapsed().as_millis(),
                     status: "error".to_owned(),
+                    data: None,
                 },
             );
             if let Some(state) = app.try_state::<AppState>() {
@@ -873,6 +968,9 @@ fn spawn_hotkey_listener(app: AppHandle, events: Receiver<HotkeyEvent>) {
                 if paused {
                     continue;
                 }
+                // Окно результата открывается только после вызова: фиксируем
+                // внешний источник до запуска модуля и показа окон хоста.
+                capture_external_source(&app);
                 let handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     invoke_and_show(&handle, control_action_ref(), InvocationSource::Hotkey);
@@ -1018,6 +1116,71 @@ struct PluginDto {
     enabled: bool,
     status: String,
     actions: Vec<PluginActionDto>,
+    settings: Option<SettingsSchema>,
+    forms: BTreeMap<String, FormState>,
+    active_profile: Option<String>,
+}
+
+fn form_state_for(store: &SettingsStore, manifest: &Manifest) -> Option<FormState> {
+    let schema = manifest.settings.as_ref()?;
+    let active = active_profile_for(store, manifest, schema);
+    let values = store.values(&manifest.id, active.as_deref()).ok()?;
+    let saved: BTreeSet<String> = store
+        .saved_secret_refs(&manifest.id)
+        .ok()?
+        .into_iter()
+        .collect();
+    schema.form_state(active.as_deref(), &values, &saved).ok()
+}
+
+fn active_profile_for(
+    store: &SettingsStore,
+    manifest: &Manifest,
+    schema: &SettingsSchema,
+) -> Option<String> {
+    store
+        .active_profile(&manifest.id)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            schema
+                .profile_field
+                .as_ref()
+                .and_then(|field| schema.top_field(field))
+                .and_then(|field| field.default.as_ref())
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+fn forms_for(
+    store: &SettingsStore,
+    manifest: &Manifest,
+) -> (BTreeMap<String, FormState>, Option<String>) {
+    let Some(schema) = manifest.settings.as_ref() else {
+        return (BTreeMap::new(), None);
+    };
+    let active = active_profile_for(store, manifest, schema);
+    let saved: BTreeSet<String> = store
+        .saved_secret_refs(&manifest.id)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let mut forms = BTreeMap::new();
+    for profile in &schema.profiles {
+        let values = store
+            .values(&manifest.id, Some(&profile.id))
+            .unwrap_or_default();
+        if let Ok(state) = schema.form_state(Some(&profile.id), &values, &saved) {
+            forms.insert(profile.id.clone(), state);
+        }
+    }
+    if forms.is_empty() {
+        if let Some(state) = form_state_for(store, manifest) {
+            forms.insert(String::new(), state);
+        }
+    }
+    (forms, active)
 }
 
 /// Строит страницу настроек и трей из одного снимка активных манифестов.
@@ -1025,12 +1188,13 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
     let Some(state) = app.try_state::<AppState>() else {
         return Vec::new();
     };
+    let settings_store = state.settings.clone();
     state
         .catalog
         .registry
         .modules()
         .into_iter()
-        .map(|entry| {
+        .map(move |entry| {
             let enabled = entry.enabled;
             let icon = entry.manifest.icon.as_ref().and_then(|icon| {
                 entry
@@ -1038,6 +1202,7 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
                     .parent()
                     .and_then(|directory| icon_data_url(&directory.join(icon)))
             });
+            let (forms, active_profile) = forms_for(&settings_store, &entry.manifest);
             PluginDto {
                 id: entry.manifest.id.clone(),
                 name: entry.manifest.name.clone(),
@@ -1063,6 +1228,9 @@ fn collect_plugins(app: &AppHandle) -> Vec<PluginDto> {
                         hotkey: action_hotkey(app, &entry.manifest, action),
                     })
                     .collect(),
+                settings: entry.manifest.settings.clone(),
+                forms,
+                active_profile,
             }
         })
         .collect()
@@ -1121,6 +1289,132 @@ fn set_plugin_enabled(app: AppHandle, plugin_id: String, enabled: bool) -> Resul
         rebuild_tray_menu(&app)?;
     }
     Ok(())
+}
+
+
+#[tauri::command]
+fn save_plugin_settings(
+    app: AppHandle,
+    plugin_id: String,
+    active_profile: Option<String>,
+    values: BTreeMap<String, serde_json::Value>,
+    secrets: BTreeMap<String, String>,
+) -> Result<FormState, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "каталог модулей не готов".to_owned())?;
+    let entry = state
+        .catalog
+        .registry
+        .module(&plugin_id)
+        .ok_or_else(|| format!("модуль {plugin_id} не найден"))?;
+    let schema = entry
+        .manifest
+        .settings
+        .as_ref()
+        .ok_or_else(|| format!("у модуля {plugin_id} нет формы настроек"))?;
+    let profile = active_profile
+        .or_else(|| {
+            values
+                .get("activeProfile")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            schema
+                .profile_field
+                .as_ref()
+                .and_then(|field| schema.top_field(field))
+                .and_then(|field| field.default.as_ref())
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+    let profile_schema = if schema.profiles.is_empty() {
+        None
+    } else {
+        let id = profile
+            .as_deref()
+            .ok_or_else(|| "не выбран профиль настроек".to_owned())?;
+        Some(
+            schema
+                .profile(id)
+                .ok_or_else(|| format!("профиль настроек {id} не найден"))?,
+        )
+    };
+    for field in schema
+        .fields
+        .iter()
+        .chain(profile_schema.into_iter().flat_map(|profile| profile.fields.iter()))
+    {
+        if field.kind == SettingKind::Secret {
+            if let Some(value) = secrets.get(&field.id).filter(|value| !value.is_empty()) {
+                let secret_ref = field
+                    .secret_ref
+                    .as_deref()
+                    .ok_or_else(|| format!("у поля {} нет ссылки на секрет", field.id))?;
+                state
+                    .settings
+                    .write_secret(&plugin_id, secret_ref, value)
+                    .map_err(|error| error.to_string())?;
+            }
+            if field.required {
+                let secret_ref = field
+                    .secret_ref
+                    .as_deref()
+                    .ok_or_else(|| format!("у поля {} нет ссылки на секрет", field.id))?;
+                if !state
+                    .settings
+                    .secret_present(&plugin_id, secret_ref)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err(format!("Заполните поле «{}»", field.label));
+                }
+            }
+        } else if field.required
+            && !values.get(&field.id).is_some_and(|value| {
+                !value.is_null()
+                    && value
+                        .as_str()
+                        .is_none_or(|text| !text.trim().is_empty())
+            })
+        {
+            return Err(format!("Заполните поле «{}»", field.label));
+        }
+    }
+    let mut stored_values = values;
+    stored_values.remove("activeProfile");
+    state
+        .settings
+        .save(
+            &plugin_id,
+            profile.as_deref(),
+            profile.as_deref(),
+            &stored_values,
+        )
+        .map_err(|error| error.to_string())?;
+    form_state_for(&state.settings, &entry.manifest)
+        .ok_or_else(|| "не удалось построить состояние формы".to_owned())
+}
+
+#[tauri::command]
+fn take_pending_plugin_settings(app: AppHandle) -> Option<PluginSettingsFocus> {
+    app.try_state::<AppState>()
+        .and_then(|state| state.pending_settings.lock().ok().and_then(|mut slot| slot.take()))
+}
+
+#[tauri::command]
+fn open_plugin_settings(app: AppHandle, plugin_id: String, profile: Option<String>) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut slot) = state.pending_settings.lock() {
+            *slot = Some(PluginSettingsFocus { plugin_id, profile });
+        }
+    }
+    open_settings(&app);
+}
+
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    util_maker_platform::clipboard::write_text(&text).map_err(|error| error.to_string())
 }
 
 /// Небольшой PNG-значок из манифеста передаётся в WebView как data URL.
@@ -1261,6 +1555,7 @@ async fn invoke_target(
     app: &AppHandle,
     target: ActionRef,
     source: Option<String>,
+    params: serde_json::Value,
 ) -> Result<LastResult, String> {
     let parsed = match source.as_deref() {
         Some("hotkey") => InvocationSource::Hotkey,
@@ -1269,17 +1564,21 @@ async fn invoke_target(
     let handle = app.clone();
     let call_target = target.clone();
     let started = Instant::now();
-    let outcome =
-        tauri::async_runtime::spawn_blocking(move || invoke_action(&handle, &call_target, parsed))
-            .await
-            .map_err(|error| format!("задача вызова прервана: {error}"))??;
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        invoke_action(&handle, &call_target, parsed, params)
+    })
+    .await
+    .map_err(|error| format!("задача вызова прервана: {error}"))??;
     let last = LastResult {
         message: outcome.message.clone(),
+        module_id: outcome.module_id.clone(),
+        action_id: outcome.action_id.clone(),
         action_name: outcome.action_name.clone(),
         source: source.unwrap_or_else(|| "settings".to_owned()),
         core_elapsed_ms: outcome.elapsed.as_millis(),
         since_event_ms: started.elapsed().as_millis(),
         status: format!("{:?}", outcome.status).to_lowercase(),
+        data: outcome.data,
     };
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut slot) = state.last_result.lock() {
@@ -1291,7 +1590,7 @@ async fn invoke_target(
 
 #[tauri::command]
 async fn invoke_control(app: AppHandle, source: Option<String>) -> Result<LastResult, String> {
-    invoke_target(&app, control_action_ref(), source).await
+    invoke_target(&app, control_action_ref(), source, serde_json::Value::Null).await
 }
 
 #[tauri::command]
@@ -1300,8 +1599,12 @@ async fn invoke_plugin_action(
     module_id: String,
     action_id: String,
     source: Option<String>,
+    text: Option<String>,
 ) -> Result<LastResult, String> {
-    invoke_target(&app, ActionRef::new(module_id, action_id), source).await
+    let params = text.map_or(serde_json::Value::Null, |text| {
+        serde_json::json!({"manualText": text})
+    });
+    invoke_target(&app, ActionRef::new(module_id, action_id), source, params).await
 }
 
 #[tauri::command]

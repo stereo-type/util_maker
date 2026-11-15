@@ -277,10 +277,37 @@ impl ModuleProcess {
         host: &mut dyn HostHandler,
         capabilities: &[String],
     ) -> Result<InvokeResult, CoreError> {
+        self.invoke_cancellable_with_host_params(
+            call_id,
+            action_id,
+            source,
+            Value::Null,
+            timeout,
+            cancel,
+            host,
+            capabilities,
+        )
+    }
+
+    /// Вариант с дополнительными входными данными действия. Старый контракт
+    /// без `params` остаётся совместимым: модуль получает `null`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn invoke_cancellable_with_host_params(
+        &mut self,
+        call_id: &str,
+        action_id: &str,
+        source: InvocationSource,
+        action_params: Value,
+        timeout: Duration,
+        cancel: &AtomicBool,
+        host: &mut dyn HostHandler,
+        capabilities: &[String],
+    ) -> Result<InvokeResult, CoreError> {
         let params = InvokeRequest {
             call_id: call_id.to_owned(),
             action_id: action_id.to_owned(),
             context: CallContext { source },
+            params: action_params,
         };
         let id = self.next_id();
         self.send_value(&json!({

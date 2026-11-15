@@ -87,6 +87,23 @@
         margin-top: 12px;
       }
       .action-card .row { align-items: flex-start; }
+      .settings-form { display: grid; gap: 12px; margin-top: 10px; }
+      .form-field { display: grid; gap: 6px; font-size: 14px; }
+      .form-field span.label { color: var(--muted); font-size: 12.5px; }
+      .form-field input, .form-field select {
+        width: 100%;
+        padding: 9px 11px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+      }
+      .form-field input:focus-visible, .form-field select:focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 1px;
+      }
+      .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
       dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 12px 0 0; font-size: 14px; }
       dt { color: var(--muted); }
       dd { margin: 0; overflow-wrap: anywhere; }
@@ -168,6 +185,7 @@
         <div id="plugin-detail" hidden>
           <h3>Действия</h3>
           <div id="plugin-actions"></div>
+          <div id="plugin-settings" hidden></div>
           <div class="result" id="result" role="status" aria-live="polite">Результат появится здесь.</div>
         </div>
       </section>
@@ -223,6 +241,7 @@
         list: document.getElementById("plugin-list"),
         detail: document.getElementById("plugin-detail"),
         actions: document.getElementById("plugin-actions"),
+        settings: document.getElementById("plugin-settings"),
         result: document.getElementById("result"),
         log: document.getElementById("log-path"),
         config: document.getElementById("config-path"),
@@ -236,6 +255,7 @@
       };
       let plugins = [];
       let currentPlugin = null;
+      let currentProfile = null;
       let hotkeyTarget = null;
 
       function showResult(text, kind) {
@@ -344,8 +364,140 @@
         return card;
       }
 
-      function openPlugin(plugin) {
+      function formField(field, value, secret, values, secrets) {
+        const label = document.createElement("label");
+        label.className = "form-field";
+        const caption = document.createElement("span");
+        caption.className = "label";
+        caption.textContent = field.label + (field.required ? " *" : "");
+        label.append(caption);
+        if (field.type === "select") {
+          const select = document.createElement("select");
+          for (const option of field.options || []) {
+            const item = document.createElement("option");
+            item.value = option.value;
+            item.textContent = option.label;
+            select.append(item);
+          }
+          select.value = value ?? field.default ?? "";
+          select.addEventListener("change", () => { values[field.id] = select.value; });
+          values[field.id] = select.value;
+          label.append(select);
+        } else if (field.type === "secret") {
+          const input = document.createElement("input");
+          input.type = "password";
+          input.autocomplete = "new-password";
+          input.spellcheck = false;
+          input.placeholder = secret?.present
+            ? "Ключ сохранён; введите новый для замены"
+            : "Введите API-ключ";
+          input.addEventListener("input", () => { secrets[field.id] = input.value; });
+          label.append(input);
+          const hint = document.createElement("span");
+          hint.className = "hint";
+          hint.textContent = secret?.present ? "Секрет хранится в системном хранилище." : "Ключ ещё не сохранён.";
+          label.append(hint);
+        } else {
+          const input = document.createElement("input");
+          input.type = field.type === "number" ? "number" : "text";
+          input.value = value ?? field.default ?? "";
+          input.addEventListener("input", () => {
+            values[field.id] = field.type === "number" && input.value !== ""
+              ? Number(input.value)
+              : input.value;
+          });
+          values[field.id] = input.value;
+          label.append(input);
+        }
+        return label;
+      }
+
+      function renderSettings(plugin) {
+        const host = elements.settings;
+        host.innerHTML = "";
+        const schema = plugin.settings;
+        if (!schema || !schema.profiles || schema.profiles.length === 0) {
+          host.hidden = true;
+          return;
+        }
+        host.hidden = false;
+        const title = document.createElement("h3");
+        title.textContent = "Настройки профиля";
+        title.style.marginTop = "16px";
+        host.append(title);
+        const profileIds = schema.profiles.map((profile) => profile.id);
+        const profile = profileIds.includes(currentProfile)
+          ? currentProfile
+          : (plugin.activeProfile && profileIds.includes(plugin.activeProfile)
+            ? plugin.activeProfile
+            : profileIds[0]);
+        currentProfile = profile;
+        const form = plugin.forms?.[profile] || { values: {}, secrets: {} };
+        const values = { ...(form.values || {}) };
+        const secrets = {};
+        const wrapper = document.createElement("div");
+        wrapper.className = "settings-form";
+        const activeField = schema.profileField
+          ? schema.fields.find((field) => field.id === schema.profileField)
+          : null;
+        if (activeField) {
+          const activeSelect = formField(
+            { ...activeField, type: "select" },
+            profile,
+            null,
+            values,
+            secrets
+          );
+          const select = activeSelect.querySelector("select");
+          select.value = profile;
+          values[activeField.id] = profile;
+          select.addEventListener("change", () => {
+            currentProfile = select.value;
+            renderSettings(plugin);
+          });
+          wrapper.append(activeSelect);
+        }
+        for (const field of schema.fields) {
+          if (activeField && field.id === activeField.id) continue;
+          wrapper.append(formField(field, values[field.id], null, values, secrets));
+        }
+        const profileSchema = schema.profiles.find((item) => item.id === profile);
+        for (const field of profileSchema?.fields || []) {
+          wrapper.append(
+            formField(field, values[field.id], form.secrets?.[field.id], values, secrets)
+          );
+        }
+        const actionRow = document.createElement("div");
+        actionRow.className = "settings-actions";
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "primary";
+        save.textContent = "Сохранить настройки";
+        save.addEventListener("click", async () => {
+          save.disabled = true;
+          try {
+            await invoke("save_plugin_settings", {
+              pluginId: plugin.id,
+              activeProfile: profile,
+              values,
+              secrets,
+            });
+            await loadPlugins();
+            showResult("Настройки сохранены.", "ok");
+          } catch (error) {
+            showResult(`Не удалось сохранить настройки: ${error}`, "error");
+          } finally {
+            save.disabled = false;
+          }
+        });
+        actionRow.append(save);
+        wrapper.append(actionRow);
+        host.append(wrapper);
+      }
+
+      function openPlugin(plugin, keepProfile = false) {
         currentPlugin = plugin;
+        if (!keepProfile) currentProfile = null;
         elements.detail.hidden = false;
         elements.actions.innerHTML = "";
         if (!plugin.installed) {
@@ -356,6 +508,18 @@
         for (const action of plugin.actions) {
           elements.actions.append(actionRow(plugin, action));
         }
+        renderSettings(plugin);
+      }
+
+      async function applyPendingSettings() {
+        const pending = await invoke("take_pending_plugin_settings");
+        if (!pending) return false;
+        const plugin = plugins.find((item) => item.id === pending.pluginId);
+        if (!plugin) return false;
+        currentProfile = pending.profile || plugin.activeProfile || currentProfile;
+        openPlugin(plugin, true);
+        elements.settings.scrollIntoView({ block: "nearest" });
+        return true;
       }
 
       async function loadPlugins() {
@@ -365,16 +529,21 @@
           if (currentPlugin) {
             const refreshed = plugins.find((plugin) => plugin.id === currentPlugin.id);
             if (refreshed) {
-              openPlugin(refreshed);
+              openPlugin(refreshed, true);
             } else {
               currentPlugin = null;
               elements.detail.hidden = true;
             }
           }
+          await applyPendingSettings();
         } catch (error) {
           elements.list.textContent = `Не удалось прочитать микроприложения: ${error}`;
         }
       }
+
+      window.setInterval(() => {
+        if (plugins.length > 0) applyPendingSettings().catch(() => {});
+      }, 1000);
 
       async function invokeAction(plugin, action) {
         showResult("Выполняется вызов отдельного процесса…", "");

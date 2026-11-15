@@ -401,6 +401,20 @@ impl Registry {
         logger: Option<Logger>,
         session: &mut dyn SessionHost,
     ) -> Result<InvokeOutcome, Box<InvokeFailure>> {
+        self.invoke_session_with_params(target, context, Value::Null, timeout, logger, session)
+    }
+
+    /// Вариант вызова с дополнительными входными данными действия. Старые
+    /// модули получают `params: null` и продолжают работать без изменений.
+    pub fn invoke_session_with_params(
+        &self,
+        target: &ActionRef,
+        context: InvocationContext,
+        params: Value,
+        timeout: Duration,
+        logger: Option<Logger>,
+        session: &mut dyn SessionHost,
+    ) -> Result<InvokeOutcome, Box<InvokeFailure>> {
         let call_id = make_call_id();
         let started = Instant::now();
         let failure_logger = logger.clone();
@@ -448,6 +462,7 @@ impl Registry {
             &action,
             &call_id,
             &call_session,
+            params,
             timeout,
             logger,
             &cancel,
@@ -486,6 +501,7 @@ impl Registry {
         action: &Action,
         call_id: &str,
         call_session: &CallSession,
+        params: Value,
         timeout: Duration,
         logger: Option<Logger>,
         cancel: &Arc<AtomicBool>,
@@ -509,10 +525,11 @@ impl Registry {
         }
         let pid = process.pid();
         let host_handler: &mut dyn HostHandler = session;
-        let result = process.invoke_cancellable_with_host(
+        let result = process.invoke_cancellable_with_host_params(
             call_id,
             &action.id,
             call_session.context.source,
+            params,
             timeout,
             cancel.as_ref(),
             host_handler,

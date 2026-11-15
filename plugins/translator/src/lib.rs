@@ -4,6 +4,13 @@
 //! адаптером, а запрос перевода — приёмником. Это позволяет проверить оба
 //! порядка действий, отмену и ручной ввод на тестовых адаптерах без Windows.
 
+pub mod service;
+
+pub use service::{
+    check_active_profile, translate_from_source, TranslationOutcome, CLIPBOARD_CAPABILITY,
+    SECRET_CAPABILITY, SELECTION_CAPABILITY, SELECTION_TIMEOUT, SETTINGS_CAPABILITY,
+};
+
 /// Снимок исходного элемента в момент вызова.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceSnapshot {

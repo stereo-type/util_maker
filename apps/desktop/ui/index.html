@@ -193,7 +193,56 @@
       .muted { color: var(--muted); }
       .extension-point { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
       .extension-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-      .extension-point select { margin-bottom: 8px; }
+      .extension-list { display: grid; gap: 6px; margin-top: 10px; }
+      .extension-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px 8px 12px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--bg);
+      }
+      .extension-row.active { border-color: var(--accent); }
+      .extension-row.disabled { opacity: 0.7; }
+      .extension-row input[type="radio"] {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        flex: none;
+        accent-color: var(--accent);
+      }
+      .extension-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+      .extension-row-title { font-weight: 600; overflow-wrap: anywhere; }
+      .extension-status { font-size: 12px; color: var(--muted); }
+      .extension-status.ok { color: var(--ok); }
+      .extension-status.warn { color: var(--warn); }
+      .extension-more { padding: 2px 8px; line-height: 1; font-size: 16px; flex: none; }
+      .extension-empty { margin: 10px 0 0; }
+      .extension-menu {
+        position: fixed;
+        z-index: 300;
+        min-width: 190px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 6px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--panel);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+      }
+      .extension-menu button {
+        text-align: left;
+        border: none;
+        background: transparent;
+        padding: 7px 10px;
+        border-radius: 6px;
+      }
+      .extension-menu button:hover,
+      .extension-menu button:focus-visible {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+      }
     </style>
   </head>
   <body>
@@ -751,6 +800,7 @@
       }
 
       async function renderExtensions(plugin) {
+        closeExtensionMenu();
         const host = elements.pluginExtensions;
         host.innerHTML = "";
         let points = [];
@@ -782,39 +832,127 @@
           head.append(name, state);
           box.append(head);
 
-          const select = document.createElement("select");
-          select.className = "hotkey-input";
-          select.setAttribute("aria-label", `Активный плагин для ${point.name}`);
-          const none = document.createElement("option");
-          none.value = "";
-          none.textContent = "Не выбрано";
-          select.append(none);
-          for (const contribution of point.contributions || []) {
-            const option = document.createElement("option");
-            option.value = contribution.moduleId;
-            option.textContent = contribution.available
-              ? contribution.name
-              : `${contribution.name} — ${contribution.reason || "недоступен"}`;
-            option.disabled = !contribution.available;
-            option.selected = contribution.moduleId === point.selected;
-            select.append(option);
+          const contributions = point.contributions || [];
+          const list = document.createElement("div");
+          list.className = "extension-list";
+          if (!contributions.length) {
+            const empty = document.createElement("p");
+            empty.className = "hint extension-empty";
+            empty.textContent = "Плагины не установлены. Установите пакет и выберите его в списке.";
+            list.append(empty);
           }
-          select.addEventListener("change", async () => {
-            if (!select.value) return;
-            try {
-              await invoke("select_extension", {
-                moduleId: plugin.id,
-                pointId: point.pointId,
-                pluginId: select.value,
-              });
-              await loadPlugins();
-              const refreshed = plugins.find((item) => item.id === plugin.id);
-              if (refreshed) openPlugin(refreshed);
-            } catch (error) {
-              showResult(`Не удалось выбрать плагин: ${error}`, "error");
+          for (const contribution of contributions) {
+            const entry = plugins.find((item) => item.id === contribution.moduleId);
+            const row = document.createElement("div");
+            row.className =
+              "extension-row" +
+              (contribution.moduleId === point.selected ? " active" : "") +
+              (contribution.available ? "" : " disabled");
+
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = `extension-${point.moduleId}-${point.pointId}`;
+            radio.value = contribution.moduleId;
+            radio.checked = contribution.moduleId === point.selected;
+            radio.disabled = !contribution.available;
+            radio.setAttribute(
+              "aria-label",
+              `Сделать «${contribution.name}» активным плагином «${point.name}»`
+            );
+            radio.addEventListener("change", async () => {
+              try {
+                await invoke("select_extension", {
+                  moduleId: plugin.id,
+                  pointId: point.pointId,
+                  pluginId: contribution.moduleId,
+                });
+                await loadPlugins();
+                const refreshed = plugins.find((item) => item.id === plugin.id);
+                if (refreshed) openPlugin(refreshed);
+              } catch (error) {
+                showResult(`Не удалось выбрать плагин: ${error}`, "error");
+              }
+            });
+
+            const main = document.createElement("div");
+            main.className = "extension-row-main";
+            const rowTitle = document.createElement("span");
+            rowTitle.className = "extension-row-title";
+            rowTitle.textContent = contribution.name;
+            const status = document.createElement("span");
+            status.className = "extension-status";
+            if (contribution.moduleId === point.selected) {
+              status.textContent = "активен";
+              status.classList.add("ok");
+            } else if (!contribution.enabled) {
+              status.textContent = "выключен";
+            } else if (!contribution.available) {
+              status.textContent = `недоступен${
+                contribution.reason ? `: ${contribution.reason}` : ""
+              }`;
+              status.classList.add("warn");
+            } else {
+              status.textContent = contribution.description || "готов";
             }
-          });
-          box.append(select);
+            main.append(rowTitle, status);
+            row.append(radio, main);
+
+            if (entry) {
+              const more = document.createElement("button");
+              more.type = "button";
+              more.className = "extension-more";
+              more.textContent = "⋯";
+              more.setAttribute("aria-label", `Действия: ${contribution.name}`);
+              more.setAttribute("aria-haspopup", "menu");
+              more.setAttribute("aria-expanded", "false");
+              more.addEventListener("click", (event) => {
+                event.stopPropagation();
+                openExtensionMenu(more, [
+                  { label: `Настроить ${contribution.name}`, run: () => openPlugin(entry) },
+                  {
+                    label: contribution.enabled
+                      ? `Отключить ${contribution.name}`
+                      : `Включить ${contribution.name}`,
+                    run: async () => {
+                      try {
+                        await invoke("set_plugin_enabled", {
+                          pluginId: contribution.moduleId,
+                          enabled: !contribution.enabled,
+                        });
+                        await loadPlugins();
+                        const refreshed = plugins.find((item) => item.id === plugin.id);
+                        if (refreshed) openPlugin(refreshed);
+                      } catch (error) {
+                        showResult(`Не удалось переключить плагин: ${error}`, "error");
+                      }
+                    },
+                  },
+                  {
+                    label: `Удалить ${contribution.name}`,
+                    run: async () => {
+                      const confirmed = await askConfirm(
+                        "Удалить плагин?",
+                        `Пакет ${contribution.name} и его ключи будут удалены. Микроприложение и второй плагин останутся.`
+                      );
+                      if (!confirmed) return;
+                      try {
+                        await invoke("remove_package", { pluginId: contribution.moduleId });
+                        await loadPlugins();
+                        const refreshed = plugins.find((item) => item.id === plugin.id);
+                        if (refreshed) openPlugin(refreshed);
+                      } catch (error) {
+                        showResult(`Не удалось удалить плагин: ${error}`, "error");
+                      }
+                    },
+                  },
+                ]);
+              });
+              row.append(more);
+            }
+
+            list.append(row);
+          }
+          box.append(list);
 
           const actions = document.createElement("div");
           actions.className = "actions";
@@ -822,65 +960,81 @@
           install.type = "button";
           install.textContent = "Установить плагин";
           install.addEventListener("click", () => {
+            closeExtensionMenu();
+            closePlugin();
+            const section = document.getElementById("package-title")?.closest("details");
+            if (section) section.open = true;
             document.getElementById("package-title").scrollIntoView({ behavior: "smooth" });
             elements.packagePath.focus();
           });
           actions.append(install);
-
-          for (const contribution of point.contributions || []) {
-            const entry = plugins.find((item) => item.id === contribution.moduleId);
-            if (entry) {
-              const manage = document.createElement("button");
-              manage.type = "button";
-              manage.textContent = `Настроить ${contribution.name}`;
-              manage.addEventListener("click", () => openPlugin(entry));
-              actions.append(manage);
-            }
-            const toggle = document.createElement("button");
-            toggle.type = "button";
-            toggle.disabled = !entry;
-            toggle.textContent = contribution.available
-              ? `Отключить ${contribution.name}`
-              : `Включить ${contribution.name}`;
-            toggle.addEventListener("click", async () => {
-              try {
-                await invoke("set_plugin_enabled", {
-                  pluginId: contribution.moduleId,
-                  enabled: !contribution.available,
-                });
-                await loadPlugins();
-                const refreshed = plugins.find((item) => item.id === plugin.id);
-                if (refreshed) openPlugin(refreshed);
-              } catch (error) {
-                showResult(`Не удалось переключить плагин: ${error}`, "error");
-              }
-            });
-            actions.append(toggle);
-
-            const remove = document.createElement("button");
-            remove.type = "button";
-            remove.disabled = !entry;
-            remove.textContent = `Удалить ${contribution.name}`;
-            remove.addEventListener("click", async () => {
-              const confirmed = await askConfirm(
-                "Удалить плагин?",
-                `Пакет ${contribution.name} и его ключи будут удалены. Микроприложение и второй плагин останутся.`
-              );
-              if (!confirmed) return;
-              try {
-                await invoke("remove_package", { pluginId: contribution.moduleId });
-                await loadPlugins();
-                const refreshed = plugins.find((item) => item.id === plugin.id);
-                if (refreshed) openPlugin(refreshed);
-              } catch (error) {
-                showResult(`Не удалось удалить плагин: ${error}`, "error");
-              }
-            });
-            actions.append(remove);
-          }
           box.append(actions);
           host.append(box);
         }
+      }
+
+      function closeExtensionMenu() {
+        document.querySelectorAll(".extension-menu").forEach((menu) => menu.remove());
+        document.querySelectorAll('.extension-more[aria-expanded="true"]').forEach((button) => {
+          button.setAttribute("aria-expanded", "false");
+        });
+      }
+
+      function openExtensionMenu(button, items) {
+        const wasOpen = button.getAttribute("aria-expanded") === "true";
+        closeExtensionMenu();
+        if (wasOpen) return;
+        const menu = document.createElement("div");
+        menu.className = "extension-menu";
+        menu.setAttribute("role", "menu");
+        for (const item of items) {
+          const entry = document.createElement("button");
+          entry.type = "button";
+          entry.setAttribute("role", "menuitem");
+          entry.textContent = item.label;
+          entry.addEventListener("click", () => {
+            closeExtensionMenu();
+            item.run();
+          });
+          menu.append(entry);
+        }
+        document.body.append(menu);
+        button.setAttribute("aria-expanded", "true");
+        const rect = button.getBoundingClientRect();
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+        const left = Math.max(
+          8,
+          Math.min(rect.right - width, window.innerWidth - width - 8)
+        );
+        let top = rect.bottom + 4;
+        if (top + height > window.innerHeight - 8) {
+          top = Math.max(8, rect.top - height - 4);
+        }
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            closeExtensionMenu();
+            button.focus();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const items = Array.from(menu.querySelectorAll("button"));
+          if (!items.length) return;
+          const first = items[0];
+          const last = items[items.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        });
+        const firstItem = menu.querySelector("button");
+        if (firstItem) firstItem.focus();
       }
 
       function closePlugin() {
@@ -1200,6 +1354,14 @@
         }
       });
 
+      document.addEventListener("click", (event) => {
+        if (!event.target.closest(".extension-menu") && !event.target.closest(".extension-more")) {
+          closeExtensionMenu();
+        }
+      });
+      elements.detail.addEventListener("scroll", closeExtensionMenu, true);
+      window.addEventListener("resize", closeExtensionMenu);
+
       document.getElementById("hotkey-save").addEventListener("click", saveHotkey);
       document.getElementById("hotkey-cancel").addEventListener("click", closeHotkey);
       elements.modal.addEventListener("click", (event) => {
@@ -1207,6 +1369,10 @@
       });
       document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape") return;
+        if (document.querySelector(".extension-menu")) {
+          closeExtensionMenu();
+          return;
+        }
         if (!elements.confirmModal.hidden) closeConfirm(false);
         else if (!elements.modal.hidden) closeHotkey();
         else if (!elements.detail.hidden) closePlugin();

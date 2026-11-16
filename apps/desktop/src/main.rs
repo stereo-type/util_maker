@@ -1769,8 +1769,81 @@ fn qr_read_region(app: AppHandle, x: i32, y: i32, width: u32, height: u32) -> Re
             "height": selection.height,
         }
     });
-    invoke_and_show_params(&app, target, source, params, Some(frozen), false);
+    // Окно выбора закрывает сам overlay после ответа команды: закрывать его
+    // изнутри обработчика, пока WebView ждёт invoke, нельзя — окно зависает.
+    let app_for_call = app.clone();
+    std::thread::spawn(move || {
+        qr_read_and_show(app_for_call, target, source, params, frozen);
+    });
     Ok(())
+}
+
+/// Выполняет чтение QR вне основного потока и показывает результат, когда
+/// плагин закончил. Вызов из основного потока блокировал бы WebView2 и
+/// закрытие окна выбора.
+fn qr_read_and_show(
+    app: AppHandle,
+    target: ActionRef,
+    source: InvocationSource,
+    params: serde_json::Value,
+    frozen: FrozenFrame,
+) {
+    let started = Instant::now();
+    let selection = Arc::new(Mutex::new(selection_service()));
+    let context = InvocationContext::new(source);
+    let result = match invoke_action_params_with_frozen(
+        &app,
+        &target,
+        source,
+        params,
+        selection,
+        context,
+        Some(frozen),
+    ) {
+        Ok(outcome) => {
+            let since_event = started.elapsed();
+            logging::write(&format!(
+                "action->result source={} module={} action={} core_elapsed_ms={} since_event_ms={}",
+                source.as_str(),
+                outcome.module_id,
+                outcome.action_id,
+                outcome.elapsed.as_millis(),
+                since_event.as_millis()
+            ));
+            LastResult {
+                message: outcome.message.clone(),
+                data: outcome.data.clone(),
+                module_id: outcome.module_id.clone(),
+                action_id: outcome.action_id.clone(),
+                action_name: outcome.action_name.clone(),
+                source: source.as_str().to_owned(),
+                core_elapsed_ms: outcome.elapsed.as_millis(),
+                since_event_ms: since_event.as_millis(),
+                status: outcome_status(&outcome).to_owned(),
+            }
+        }
+        Err(error) => {
+            logging::write(&format!(
+                "ошибка чтения QR module={} action={} source={}: {error}",
+                target.module_id,
+                target.action_id,
+                source.as_str()
+            ));
+            LastResult {
+                message: format!("Не удалось прочитать QR: {error}"),
+                data: None,
+                module_id: target.module_id.clone(),
+                action_id: target.action_id.clone(),
+                action_name: "Прочитать QR с экрана".to_owned(),
+                source: source.as_str().to_owned(),
+                core_elapsed_ms: 0,
+                since_event_ms: started.elapsed().as_millis(),
+                status: "error".to_owned(),
+            }
+        }
+    };
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || show_result(&handle, result));
 }
 
 /// Открывает окно выбора заново после неудачного чтения QR.

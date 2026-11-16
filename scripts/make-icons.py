@@ -182,6 +182,11 @@ def glyph_settings(pen):
     pen.circle((0.5, 0.5), 0.145, fill=0)
 
 
+def glyph_play(pen):
+    """Работа: треугольник «play» на зелёной плитке."""
+    pen.poly([(0.30, 0.22), (0.80, 0.50), (0.30, 0.78)])
+
+
 def glyph_pause(pen):
     pen.capsule((0.38, 0.27), (0.38, 0.73), 0.15)
     pen.capsule((0.62, 0.27), (0.62, 0.73), 0.15)
@@ -204,11 +209,6 @@ def glyph_fallback(pen):
         pen.rect((x, y, x + 0.25, y + 0.25), radius=0.06)
 
 
-def glyph_error(pen):
-    pen.capsule((0.5, 0.22), (0.5, 0.58), 0.13)
-    pen.circle((0.5, 0.76), 0.07)
-
-
 GLYPHS = {
     "app": glyph_app,
     "screenshot": glyph_screenshot,
@@ -221,7 +221,7 @@ GLYPHS = {
     "retry": glyph_retry,
     "quit": glyph_quit,
     "fallback": glyph_fallback,
-    "error": glyph_error,
+    "play": glyph_play,
 }
 
 OPTICAL = {
@@ -292,10 +292,7 @@ def main():
         save(ICONS / f"{size}x{size}.png", "app", app_accent, size)
     save(ICONS / "icon.ico", "app", app_accent, 256)
 
-    save(ICONS / "status-active.png", "app", app_accent, 32)
-    save(ICONS / "status-paused.png", "pause", ACCENTS["pause"], 32)
-    save(ICONS / "status-error.png", "error", ACCENTS["quit"], 32)
-    save(ICONS / "tray-working.png", "app", ACCENTS["working"], 32)
+    save(ICONS / "tray-working.png", "play", ACCENTS["working"], 32)
     save(ICONS / "tray-paused.png", "pause", ACCENTS["pause"], 32)
 
     for name in ("settings", "pause", "retry", "quit", "fallback"):

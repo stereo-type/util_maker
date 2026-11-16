@@ -959,7 +959,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .unwrap_or_else(|| {
             (
-                include_bytes!("../icons/status-error.png").as_slice(),
+                include_bytes!("../icons/tray-working.png").as_slice(),
                 "Util Maker — состояние неизвестно".to_owned(),
             )
         });
@@ -1918,6 +1918,8 @@ fn pause_menu_label(paused: bool) -> &'static str {
     }
 }
 
+/// Иконка трея показывает только два состояния: работа и пауза. Причину
+/// недоступного сочетания несёт подсказка, а не третий цвет иконки.
 fn tray_visual(paused: bool, registered: bool, status: &str) -> (&'static [u8], String) {
     if paused {
         (
@@ -1931,8 +1933,8 @@ fn tray_visual(paused: bool, registered: bool, status: &str) -> (&'static [u8], 
         )
     } else {
         (
-            include_bytes!("../icons/status-error.png").as_slice(),
-            format!("Util Maker — сочетание недоступно: {status}"),
+            include_bytes!("../icons/tray-working.png").as_slice(),
+            format!("Util Maker — работает, сочетание недоступно: {status}"),
         )
     }
 }
@@ -1952,7 +1954,7 @@ fn apply_tray_state(app: &AppHandle) {
         )
     } else {
         (
-            include_bytes!("../icons/status-error.png").as_slice(),
+            include_bytes!("../icons/tray-working.png").as_slice(),
             "Util Maker — состояние неизвестно".to_owned(),
         )
     };
@@ -3501,7 +3503,7 @@ mod tests {
         let (error_icon, error_tip) = tray_visual(false, false, "занято");
         assert_eq!(
             error_icon,
-            include_bytes!("../icons/status-error.png").as_slice()
+            include_bytes!("../icons/tray-working.png").as_slice()
         );
         assert!(error_tip.contains("недоступно"));
     }

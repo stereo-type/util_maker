@@ -299,12 +299,11 @@ def main():
     for name in ("settings", "pause", "retry", "quit", "fallback"):
         save(ICONS / f"menu-{name}.png", name, ACCENTS[name], 32)
 
-    # Иконка «Пипетки» осталась прежней: авторский синий значок лежит в
-    # plugins/color-picker/assets и генератором не перезаписывается.
     plugins = {
         "screenshot": "screenshot",
         "translator": "translator",
         "control": "app",
+        "color-picker": "pipette",
         "qr-code": "qr",
         "screen-ocr": "ocr",
     }

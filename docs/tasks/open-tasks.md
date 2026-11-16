@@ -13,4 +13,5 @@
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | На ревью | 1 |
 | [Текст с экрана](blocks/plugins/screen-ocr/README.md) | Не сделано | 2 |
 | [Текст с экрана](blocks/plugins/screen-ocr/README.md) | На ревью | 2 |
+| [QR-коды](blocks/plugins/qr-code/README.md) | На ревью | 5 |
 | [Пипетка цвета](blocks/plugins/color-picker/README.md) | На ревью | 3 |

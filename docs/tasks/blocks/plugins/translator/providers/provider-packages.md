@@ -31,6 +31,7 @@
 - Каждый пакет хранит собственный ключ под ссылкой `translator/{yandex,google}/apiKey`, выполняет `translate` и `testConnection` через общий HTTP-адаптер.
 - Ошибки плагина отдают машинный код (`unauthorized`, `quota-exceeded`, `rate-limited`, `network`, `timeout`, `invalid-response`).
 - `make build-windows` собирает и упаковывает оба пакета; установщик забирает все `.umpkg` из `dist/packages`.
+- `make bump-version` и `make check-version` учитывают манифесты обоих провайдеров: версии пакетов поднимаются вместе с приложением, иначе пакет с тем же номером и другим содержимым установка отклоняет.
 - Сборка поставки кладёт в `dist/packages` пять архивов: `screenshot`, `translator`, `color-picker`, `translator.yandex`, `translator.google`; имя файла берётся из версии собственного манифеста пакета.
 
 ## Проверка

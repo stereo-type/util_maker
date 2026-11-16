@@ -115,6 +115,8 @@ bump-version:
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/screen-ocr/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/qr-code/manifest.json
 	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/color-picker/manifest.json
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/translator/providers/yandex/manifest.json
+	@sed -i 's/"version": "[^"]*"/"version": "$(VERSION)"/' plugins/translator/providers/google/manifest.json
 	@sed -i 's/Util Maker — прототип [0-9][0-9.]*/Util Maker — прототип $(VERSION)/' installer/README.txt
 	@echo "Версия $(VERSION) записана в Cargo.toml, tauri.conf.json и установщик. Проверьте make check-version."
 
@@ -133,7 +135,7 @@ check-version:
 		echo "Версия Cargo.toml ($$cargo_version) не совпадает с tauri.conf.json ($(VERSION))"; \
 		exit 1; \
 	fi; \
-	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json plugins/screen-ocr/manifest.json plugins/qr-code/manifest.json plugins/color-picker/manifest.json; do \
+	for manifest in plugins/control/manifest.json plugins/screenshot/manifest.json plugins/translator/manifest.json plugins/screen-ocr/manifest.json plugins/qr-code/manifest.json plugins/color-picker/manifest.json plugins/translator/providers/yandex/manifest.json plugins/translator/providers/google/manifest.json; do \
 		manifest_version=$$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "$$manifest" | head -n 1); \
 		if [ "$$manifest_version" != "$$cargo_version" ]; then \
 			echo "Версия $$manifest ($$manifest_version) не совпадает с Cargo.toml ($$cargo_version)"; \

@@ -9,7 +9,6 @@
 | [Переводчик](blocks/plugins/translator/README.md) | Не сделано | 2 |
 | [Переводчик](blocks/plugins/translator/README.md) | На ревью | 2 |
 | [Пакеты](blocks/packages/README.md) | На ревью | 1 |
-| [Ядро](blocks/core/README.md) | На ревью | 1 |
 | [Контрольный плагин](blocks/plugins/control/README.md) | Не сделано | 1 |
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | Не сделано | 1 |
 | [Провайдеры переводчика](blocks/plugins/translator/providers/README.md) | На ревью | 1 |

@@ -2104,6 +2104,11 @@ fn capture_selection_source() -> (
     (selection, source_ref)
 }
 
+fn action_needs_external_selection(target: &ActionRef) -> bool {
+    (target.module_id == QR_MODULE_ID && target.action_id == "show-qr")
+        || target.action_id == "translate"
+}
+
 fn invoke_action(
     app: &AppHandle,
     target: &ActionRef,
@@ -2207,6 +2212,11 @@ fn invoke_and_show_params(
 ) {
     if activate_qr_result(app, &target) {
         return;
+    }
+    if source == InvocationSource::Tray && action_needs_external_selection(&target) {
+        // Меню трея закрывается с задержкой: без паузы foreground ещё наше
+        // меню и выделение внешней программы не читается.
+        std::thread::sleep(Duration::from_millis(150));
     }
     // Для готового кадра источник вызова не нужен: внешнее окно уже потеряло
     // фокус, и `source_lost` заблокировал бы `frame.capture`.
@@ -3464,10 +3474,24 @@ async fn invoke_target(
     };
     let handle = app.clone();
     let call_target = target.clone();
-    let context = InvocationContext::new(parsed);
+    let needs_selection = action_needs_external_selection(&target);
+    if needs_selection {
+        // Кнопка в настройках закрывает окно, чтобы фокус вернулся в программу,
+        // где пользователь выделил текст: иначе выделение недоступно.
+        if let Some(window) = app.get_webview_window(SETTINGS_WINDOW) {
+            let _ = window.hide();
+        }
+    }
     let started = Instant::now();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let selection = Arc::new(Mutex::new(selection_service()));
+        if needs_selection {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        let (selection, source_ref) = capture_selection_source();
+        let context = match parsed {
+            InvocationSource::Hotkey => InvocationContext::hotkey(source_ref),
+            InvocationSource::Tray => InvocationContext::tray(source_ref),
+        };
         invoke_action(&handle, &call_target, parsed, selection, context)
     })
     .await

@@ -109,8 +109,7 @@ package_plugin() {
     cargo run --quiet -p util-maker-packages --bin util-maker-package -- verify \
         --package "$output" \
         --public-key "$public_key" \
-        --platform windows-x64 \
-        --host-api 1.0.0 >/dev/null
+        --platform windows-x64 >/dev/null
 }
 
 package_plugin org.utilmaker.screenshot "$screenshot_module" "$screenshot_manifest" "$screenshot_icon"

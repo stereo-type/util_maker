@@ -78,8 +78,7 @@ cargo run --quiet -p util-maker-packages --bin util-maker-package -- export \
 cargo run --quiet -p util-maker-packages --bin util-maker-package -- verify \
     --package "$package" \
     --public-key "$public_key" \
-    --platform "$platform" \
-    --host-api 1.0.0 > "$samples/verify.json"
+    --platform "$platform" > "$samples/verify.json"
 
 require_line() {
     pattern=$1

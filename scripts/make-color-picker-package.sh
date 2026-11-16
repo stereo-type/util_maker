@@ -78,8 +78,7 @@ package_plugin() {
     cargo run --quiet -p util-maker-packages --bin util-maker-package -- verify \
         --package "$output" \
         --public-key "$public_key" \
-        --platform "$platform" \
-        --host-api 1.0.0 > "$out/verify-$package_version.json"
+        --platform "$platform" > "$out/verify-$package_version.json"
 
     python3 - "$output" "$package_version" "$platform" <<'PY'
 import hashlib

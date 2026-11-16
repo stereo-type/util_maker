@@ -11,10 +11,10 @@
 //!     [--version 0.5.0] [--platform linux-x64]
 //! util-maker-package verify --package plugin.umpkg \
 //!     --public-key dist/keys/org.utilmaker-public.json \
-//!     --platform linux-x64 [--host-api 1.0.0]
+//!     --platform linux-x64 [--host-api 1.1.0]
 //! util-maker-package install --package plugin.umpkg \
 //!     --public-key dist/keys/org.utilmaker-public.json --profile PROFILE \
-//!     --platform linux-x64 [--host-api 1.0.0]
+//!     --platform linux-x64 [--host-api 1.1.0]
 //! util-maker-package list --profile PROFILE
 //! util-maker-package rollback --profile PROFILE --id ID
 //! util-maker-package activate --profile PROFILE --id ID --version VERSION

@@ -191,14 +191,31 @@ Function un.ReportLeftovers
 FunctionEnd
 
 Section "Uninstall"
-    ; Приложение могло остаться в трее и держать exe, модуль или журнал.
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM util-maker-desktop.exe'
+    ; Сначала выходим из приложения и его дочерних процессов: хост держит
+    ; util-maker-desktop.exe, модули — каталог modules. Без этого exe
+    ; остаётся в каталоге установки, хотя остальное удаляется.
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /T /IM util-maker-desktop.exe'
     Pop $0
     Pop $1
     nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM control-module.exe'
     Pop $0
     Pop $1
-    Sleep 600
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM screenshot-plugin.exe'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM translator-module.exe'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM color-picker-module.exe'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM qr-code-module.exe'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM screen-ocr-module.exe'
+    Pop $0
+    Pop $1
+    Sleep 400
 
     Delete "$DESKTOP\Util Maker.lnk"
     Delete "$SMPROGRAMS\Util Maker\Util Maker.lnk"
@@ -215,7 +232,23 @@ Section "Uninstall"
     RMDir /r "$LOCALAPPDATA\Util Maker\logs"
     RMDir "$LOCALAPPDATA\Util Maker"
     uninstall_logs_done:
-    Delete "$INSTDIR\util-maker-desktop.exe"
+    ; Windows отпускает файл не сразу после taskkill: пробуем удалить exe
+    ; несколько раз, иначе он остаётся единственным файлом в каталоге.
+    StrCpy $R0 0
+    uninstall_exe_retry:
+        ClearErrors
+        Delete "$INSTDIR\util-maker-desktop.exe"
+        IfErrors uninstall_exe_busy
+        Goto uninstall_exe_done
+    uninstall_exe_busy:
+        IntOp $R0 $R0 + 1
+        IntCmp $R0 20 uninstall_exe_reboot
+        Sleep 300
+        Goto uninstall_exe_retry
+    uninstall_exe_reboot:
+        Delete /REBOOTOK "$INSTDIR\util-maker-desktop.exe"
+        MessageBox MB_ICONINFORMATION|MB_OK "Util Maker ещё завершается. Файл util-maker-desktop.exe будет удалён после перезагрузки Windows."
+    uninstall_exe_done:
     Delete "$INSTDIR\README.txt"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"

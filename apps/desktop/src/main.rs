@@ -1722,6 +1722,7 @@ fn qr_read_region(app: AppHandle, x: i32, y: i32, width: u32, height: u32) -> Re
     if x as u32 + width > frame_width || y as u32 + height > frame_height {
         return Err("область выходит за пределы экрана".to_owned());
     }
+    logging::write(&format!("QR: выбрана область x={x} y={y} {width}x{height}"));
     let frame = state
         .overlay
         .lock()

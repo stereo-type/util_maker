@@ -232,7 +232,7 @@ fn password_selection_does_not_read_or_show_value() {
 }
 
 #[test]
-fn manual_text_skips_selection_and_read_qr_is_not_implemented_yet() {
+fn manual_text_skips_selection_and_read_qr_requires_selection() {
     let manifest = Manifest::load(&manifest_path()).expect("манифест");
     let mut process = spawn(&manifest);
     let mut host = SelectionHost::new(text_selection("не читать"));
@@ -270,17 +270,184 @@ fn manual_text_skips_selection_and_read_qr_is_not_implemented_yet() {
             &mut host,
             &manifest.capabilities,
         )
-        .expect_err("чтение QR появится в следующей карточке");
+        .expect_err("без области чтение невозможно");
     match error {
         CoreError::Module { code, message } => {
-            assert_eq!(code, 2001);
-            assert!(message.contains("ещё не подключено"));
+            assert_eq!(code, error_codes::INVALID_PARAMS);
+            assert!(message.contains("область"));
         }
         other => panic!("ожидалась ошибка процесса, получено: {other}"),
     }
-    assert!(
-        host.calls().is_empty(),
-        "чтение QR не обращается к кадру до реализации"
+
+    process.shutdown();
+}
+
+struct ReadHost {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+    path: PathBuf,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl ReadHost {
+    fn new(reference: &PathBuf) -> Self {
+        let (width, height, gray) = read_pgm(reference);
+        let mut pixels = Vec::with_capacity(gray.len() * 4);
+        for value in gray {
+            pixels.extend_from_slice(&[value, value, value, 255]);
+        }
+        Self {
+            width,
+            height,
+            pixels,
+            path: std::env::temp_dir().join(format!(
+                "qr-read-test-{}-{}.bgra",
+                std::process::id(),
+                width
+            )),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("журнал вызовов").clone()
+    }
+}
+
+impl HostHandler for ReadHost {
+    fn handle(&mut self, context: &HostCallContext, call: &HostCall) -> Result<Value, RpcError> {
+        assert_eq!(call.call_id, context.call_id);
+        assert!(
+            context.allows(&call.capability),
+            "возможность {} не объявлена",
+            call.capability
+        );
+        self.calls
+            .lock()
+            .expect("журнал вызовов")
+            .push(format!("{}:{}", call.capability, call.method));
+        match call.method.as_str() {
+            host_methods::FRAME_CAPTURE => {
+                assert!(call.params.get("region").is_some(), "область кадра");
+                std::fs::write(&self.path, &self.pixels).expect("файл пикселей");
+                Ok(json!({
+                    "bufferId": "frame-1",
+                    "format": "bgra8",
+                    "width": self.width,
+                    "height": self.height,
+                    "stride": self.width * 4,
+                    "origin": {"x": 0, "y": 0},
+                    "scaleFactor": 1.0,
+                    "expiresInMs": 5000,
+                    "pixelPath": self.path.to_string_lossy(),
+                }))
+            }
+            host_methods::FRAME_RELEASE => {
+                assert_eq!(call.params["bufferId"], "frame-1");
+                let _ = std::fs::remove_file(&self.path);
+                Ok(json!({}))
+            }
+            other => Err(RpcError::new(
+                error_codes::METHOD_NOT_FOUND,
+                format!("неизвестная операция хоста: {other}"),
+            )),
+        }
+    }
+}
+
+fn read_pgm(path: &PathBuf) -> (u32, u32, Vec<u8>) {
+    let bytes = std::fs::read(path).expect("эталон PGM");
+    let mut parts = bytes.splitn(4, |byte| *byte == b'\n');
+    assert_eq!(parts.next(), Some(b"P5".as_slice()), "формат PGM");
+    let size = std::str::from_utf8(parts.next().expect("размер PGM")).expect("размер PGM");
+    let mut numbers = size.split_whitespace();
+    let width: u32 = numbers.next().expect("ширина PGM").parse().expect("ширина");
+    let height: u32 = numbers.next().expect("высота PGM").parse().expect("высота");
+    let max = std::str::from_utf8(parts.next().expect("максимум PGM")).expect("максимум PGM");
+    assert_eq!(max.trim(), "255");
+    let gray = parts.next().expect("пиксели PGM").to_vec();
+    assert_eq!(gray.len(), width as usize * height as usize);
+    (width, height, gray)
+}
+
+#[test]
+fn read_qr_decodes_selected_frame_and_releases_it() {
+    let manifest = Manifest::load(&manifest_path()).expect("манифест");
+    let mut process = spawn(&manifest);
+    let reference = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins/qr-code/reference/url.pgm")
+        .canonicalize()
+        .expect("эталон url.pgm");
+    let mut host = ReadHost::new(&reference);
+    let selection = json!({"x": 0, "y": 0, "width": host.width, "height": host.height});
+
+    let result = process
+        .invoke_cancellable_with_host_params(
+            "qr-call-7",
+            READ_QR,
+            InvocationSource::Hotkey,
+            json!({"selection": selection}),
+            Duration::from_secs(5),
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut host,
+            &manifest.capabilities,
+        )
+        .expect("чтение QR");
+    let data = result.data.expect("данные чтения");
+    assert_eq!(data["outcome"], "decoded");
+    let text = data["text"].as_str().expect("текст QR");
+    assert!(text.starts_with("http"), "неожиданный текст: {text}");
+    assert_eq!(result.message.as_deref(), Some(text));
+    assert!(data["version"].as_u64().unwrap() > 0);
+    assert_eq!(data["clipboardChanged"], false);
+    assert_eq!(
+        host.calls(),
+        [
+            "screen.capture:frame.capture",
+            "screen.capture:frame.release",
+        ]
+    );
+    assert!(!host.path.exists(), "файл кадра удалён после release");
+
+    process.shutdown();
+}
+
+#[test]
+fn read_qr_reports_missing_code_for_blank_area() {
+    let manifest = Manifest::load(&manifest_path()).expect("манифест");
+    let mut process = spawn(&manifest);
+    let reference = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins/qr-code/reference/ascii.pgm")
+        .canonicalize()
+        .expect("эталон ascii.pgm");
+    let mut host = ReadHost::new(&reference);
+
+    let error = process
+        .invoke_cancellable_with_host_params(
+            "qr-call-8",
+            READ_QR,
+            InvocationSource::Tray,
+            json!({"selection": {"x": 0, "y": 0, "width": 20, "height": 20}}),
+            Duration::from_secs(5),
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut host,
+            &manifest.capabilities,
+        )
+        .expect_err("в пустой области нет кода");
+    match error {
+        CoreError::Module { code, message } => {
+            assert_eq!(code, 2002);
+            assert!(message.contains("не найден"), "сообщение: {message}");
+        }
+        other => panic!("ожидалась ошибка чтения, получено: {other}"),
+    }
+    assert_eq!(
+        host.calls(),
+        [
+            "screen.capture:frame.capture",
+            "screen.capture:frame.release",
+        ]
     );
 
     process.shutdown();

@@ -6,12 +6,12 @@
 
 use serde_json::{json, Value};
 use util_maker_qr_code::{
-    ManualReason, SelectionRead, ShowError, ShowWindow, WindowSize, DEFAULT_WINDOW_HEIGHT,
-    DEFAULT_WINDOW_WIDTH,
+    decode_qr, DecodeOutcome, ManualReason, QrFrame, Selection as QrSelection, SelectionRead,
+    ShowError, ShowWindow, WindowSize, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
 };
 use util_maker_sdk::{
-    error_codes, host_methods, run_stdio, HostBridge, HostCallError, InvokeRequest, InvokeResult,
-    Module, ModuleInfo, RpcError, HOST_API_VERSION,
+    error_codes, host_methods, run_stdio, FrameRef, HostBridge, HostCallError, InvokeRequest,
+    InvokeResult, Module, ModuleInfo, RpcError, HOST_API_VERSION,
 };
 
 /// Стабильный ID модуля из манифеста.
@@ -26,8 +26,10 @@ const SELECTION_CAPABILITY: &str = "selection.read";
 const SCREEN_CAPABILITY: &str = "screen.capture";
 /// Возможность буфера обмена нужна второму действию.
 const CLIPBOARD_CAPABILITY: &str = "clipboard.write";
-/// Код причины, когда чтение QR ещё не подключено.
-const READ_UNAVAILABLE: i64 = 2001;
+/// Источник кадра недоступен без моста возможностей.
+const CAPTURE_UNAVAILABLE: i64 = 2001;
+/// Не удалось получить кадр или декодировать выбранную область.
+const READ_FAILED: i64 = 2002;
 
 const CAPABILITIES: &[&str] = &[
     SELECTION_CAPABILITY,
@@ -155,19 +157,161 @@ impl QrCodeModule {
         Ok(result)
     }
 
-    fn read_unavailable(request: &InvokeRequest) -> RpcError {
-        RpcError::new(
-            READ_UNAVAILABLE,
-            "чтение QR с экрана ещё не подключено в этом процессе",
-        )
-        .with_data(json!({
-            "callId": request.call_id,
-            "actionId": request.action_id,
-            "outcome": "blocked",
-            "reason": "read-qr-not-implemented",
-            "capabilities": [SCREEN_CAPABILITY, CLIPBOARD_CAPABILITY],
+    fn selection_from_params(params: &Value) -> Result<QrSelection, RpcError> {
+        let selection = params
+            .get("selection")
+            .ok_or_else(|| RpcError::new(error_codes::INVALID_PARAMS, "не передана область"))?;
+        let number = |name: &str| -> Result<i64, RpcError> {
+            selection
+                .get(name)
+                .and_then(Value::as_i64)
+                .ok_or_else(|| RpcError::new(error_codes::INVALID_PARAMS, format!("нет {name}")))
+        };
+        let width = u32::try_from(number("width")?)
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| RpcError::new(error_codes::INVALID_PARAMS, "нулевая ширина"))?;
+        let height = u32::try_from(number("height")?)
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| RpcError::new(error_codes::INVALID_PARAMS, "нулевая высота"))?;
+        Ok(QrSelection::new(
+            i32::try_from(number("x")?).unwrap_or(i32::MIN),
+            i32::try_from(number("y")?).unwrap_or(i32::MIN),
+            width,
+            height,
+        ))
+    }
+
+    fn read_failed(reason: &str, message: &str, needs_new_selection: bool) -> RpcError {
+        RpcError::new(READ_FAILED, message).with_data(json!({
+            "outcome": "read-failed",
+            "reason": reason,
+            "needsNewSelection": needs_new_selection,
             "moduleVersion": MODULE_VERSION,
         }))
+    }
+
+    fn outcome_error(outcome: &DecodeOutcome) -> RpcError {
+        match outcome {
+            DecodeOutcome::NoCode => Self::read_failed(
+                "no-code",
+                "QR-код не найден. Выделите область заново.",
+                true,
+            ),
+            DecodeOutcome::Damaged => Self::read_failed(
+                "damaged",
+                "QR-код повреждён и не читается. Выделите область заново.",
+                true,
+            ),
+            DecodeOutcome::Multiple { count } => Self::read_failed(
+                "multiple",
+                &format!("В области несколько QR-кодов ({count}). Выделите один код."),
+                true,
+            ),
+            DecodeOutcome::UnsupportedEncoding => Self::read_failed(
+                "unsupported-encoding",
+                "Кодировка QR не поддерживается.",
+                false,
+            ),
+            DecodeOutcome::BinaryPayload => Self::read_failed(
+                "binary-payload",
+                "QR содержит двоичные данные, их нельзя показать как текст.",
+                false,
+            ),
+            DecodeOutcome::Empty => Self::read_failed("empty", "QR не содержит текста.", false),
+            DecodeOutcome::Text(_) => Self::read_failed("decoded", "QR прочитан.", false),
+        }
+    }
+
+    fn handle_read(
+        &mut self,
+        request: &InvokeRequest,
+        host: Option<&mut dyn HostBridge>,
+    ) -> Result<InvokeResult, RpcError> {
+        // Окно показа QR больше не актуально: результат чтения заменяет его.
+        if let Some(window) = self.window.as_mut() {
+            window.close();
+        }
+        let Some(host) = host else {
+            return Err(RpcError::new(
+                CAPTURE_UNAVAILABLE,
+                "мост возможностей хоста недоступен",
+            ));
+        };
+        let selection = Self::selection_from_params(&request.params)?;
+        let region = json!({
+            "x": selection.x,
+            "y": selection.y,
+            "width": selection.width,
+            "height": selection.height,
+        });
+        let captured = host
+            .request(
+                SCREEN_CAPABILITY,
+                host_methods::FRAME_CAPTURE,
+                json!({ "region": region }),
+            )
+            .map_err(|error| match error {
+                HostCallError::Denied(message) => RpcError::new(
+                    CAPTURE_UNAVAILABLE,
+                    format!("источник кадра недоступен: {message}"),
+                ),
+                other => other.into_rpc_error(),
+            })?;
+        let frame: FrameRef = serde_json::from_value(captured).map_err(|error| {
+            RpcError::new(
+                error_codes::INVALID_PARAMS,
+                format!("ответ frame.capture: {error}"),
+            )
+        })?;
+        let pixels = frame.read_pixels().map_err(|error| {
+            RpcError::new(
+                READ_FAILED,
+                format!("не удалось прочитать пиксели кадра: {error}"),
+            )
+        });
+        let released = host.request(
+            SCREEN_CAPABILITY,
+            host_methods::FRAME_RELEASE,
+            json!({ "bufferId": frame.buffer_id }),
+        );
+        let pixels = pixels?;
+        released.map_err(HostCallError::into_rpc_error)?;
+        let qr_frame = QrFrame::from_frame_ref(&frame, &pixels)
+            .map_err(|error| RpcError::new(error_codes::INVALID_PARAMS, error.to_string()))?;
+        let outcome = decode_qr(&qr_frame, selection)
+            .map_err(|error| RpcError::new(error_codes::INVALID_PARAMS, error.to_string()))?;
+        match outcome {
+            DecodeOutcome::Text(ref text) => {
+                let value = text.text().to_owned();
+                let mut data = json!({
+                    "callId": request.call_id,
+                    "actionId": request.action_id,
+                    "outcome": "decoded",
+                    "text": value,
+                    "version": text.version(),
+                    "selection": {
+                        "x": selection.x,
+                        "y": selection.y,
+                        "width": selection.width,
+                        "height": selection.height,
+                    },
+                    "moduleVersion": MODULE_VERSION,
+                    "clipboardChanged": false,
+                });
+                if let Value::Object(ref mut object) = data {
+                    object.insert("source".to_owned(), json!(request.context.source.as_str()));
+                }
+                Ok(InvokeResult::ok(text.text().to_owned()).with_data(data))
+            }
+            other => Err(Self::outcome_error(&other).with_data(json!({
+                "callId": request.call_id,
+                "actionId": request.action_id,
+                "outcome": "read-failed",
+                "moduleVersion": MODULE_VERSION,
+            }))),
+        }
     }
 }
 
@@ -179,7 +323,7 @@ impl Module for QrCodeModule {
     fn invoke(&mut self, request: &InvokeRequest) -> Result<InvokeResult, RpcError> {
         match request.action_id.as_str() {
             SHOW_QR_ACTION => self.handle(request, None),
-            READ_QR_ACTION => Err(Self::read_unavailable(request)),
+            READ_QR_ACTION => self.handle_read(request, None),
             other => Err(RpcError::new(
                 error_codes::ACTION_NOT_FOUND,
                 format!("неизвестное действие: {other}"),
@@ -194,7 +338,7 @@ impl Module for QrCodeModule {
     ) -> Result<InvokeResult, RpcError> {
         match request.action_id.as_str() {
             SHOW_QR_ACTION => self.handle(request, Some(host)),
-            READ_QR_ACTION => Err(Self::read_unavailable(request)),
+            READ_QR_ACTION => self.handle_read(request, Some(host)),
             other => Err(RpcError::new(
                 error_codes::ACTION_NOT_FOUND,
                 format!("неизвестное действие: {other}"),

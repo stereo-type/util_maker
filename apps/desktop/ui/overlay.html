@@ -26,6 +26,8 @@
     <button id="cancel" type="button">Отмена</button>
     <script>
       const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
+      const mode = new URLSearchParams(window.location.search).get("mode");
+      const submitCommand = mode === "qr" ? "qr_read_region" : "open_screenshot_editor";
       const canvas = document.getElementById("screen");
       const context = canvas.getContext("2d");
       const coords = document.getElementById("coords");
@@ -112,10 +114,10 @@
           x: Math.round(selection.x), y: Math.round(selection.y),
           width: Math.max(1, Math.round(selection.w)), height: Math.max(1, Math.round(selection.h)),
         };
-        invoke("open_screenshot_editor", args).catch((error) => {
+        invoke(submitCommand, args).catch((error) => {
           opening = false;
           selection = null;
-          coords.textContent = `Не удалось открыть редактор: ${error}`;
+          coords.textContent = `Не удалось обработать область: ${error}`;
           draw();
         });
       });
@@ -127,7 +129,7 @@
         if (event.key === "Escape") cancel();
         if (event.key === "Enter" && selection) {
           const args = { x: Math.round(selection.x), y: Math.round(selection.y), width: Math.round(selection.w), height: Math.round(selection.h) };
-          invoke("open_screenshot_editor", args);
+          invoke(submitCommand, args);
         }
       });
 

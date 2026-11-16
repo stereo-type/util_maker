@@ -65,6 +65,7 @@
       </section>
       <div class="meta" id="meta"></div>
       <div class="actions">
+        <button id="retry" type="button" hidden>Выбрать другую область</button>
         <button id="copy" type="button" hidden>Копировать</button>
         <button id="disable" type="button" hidden>Отключить плагин</button>
         <button id="close" type="button">Закрыть (Esc)</button>
@@ -177,14 +178,25 @@
             const canvas = document.getElementById("qr-canvas");
             canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
           }
+          const retry = document.getElementById("retry");
+          retry.hidden = !(result.actionId === "read-qr-region" && result.status === "error");
+          retry.onclick = () => invoke("retry_qr_read");
           const copy = document.getElementById("copy");
           copy.hidden = result.status !== "ok" || qr;
           document.getElementById("close").hidden = progress;
           copy.onclick = async () => {
+            const status = document.getElementById("status");
             try {
               await invoke("copy_text", { text: result.message });
+              status.textContent = "Скопировано";
+              status.className = "status";
+              status.title = "";
             } catch (error) {
-              document.getElementById("message").textContent = `Не удалось скопировать: ${error}`;
+              // Текст остаётся на экране: занятый буфер не должен скрывать
+              // предпросмотр, иначе повторить копирование не с чем сверяться.
+              status.textContent = "Не удалось скопировать";
+              status.className = "status error";
+              status.title = String(error);
             }
           };
           const disable = document.getElementById("disable");

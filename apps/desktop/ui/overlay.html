@@ -32,37 +32,27 @@
       const dpr = window.devicePixelRatio || 1;
       const DIM = "rgba(8, 12, 22, 0.45)";
       let origin = { x: 0, y: 0, width: 0, height: 0 };
-      let frame = null;
-      let frameCanvas = null;
+      let image = null;
       let drag = null;
       let selection = null;
       let opening = false;
 
-      function resize() {
+      function resizeToWindow() {
+        if (image) return;
         canvas.width = Math.max(1, Math.round(window.innerWidth * dpr));
         canvas.height = Math.max(1, Math.round(window.innerHeight * dpr));
-        context.imageSmoothingEnabled = false;
         draw();
       }
-      window.addEventListener("resize", resize);
-
-      function prepareFrame() {
-        if (!frame || frameCanvas) return frameCanvas;
-        if (frame.data.length !== frame.width * frame.height * 4) return null;
-        frameCanvas = document.createElement("canvas");
-        frameCanvas.width = frame.width;
-        frameCanvas.height = frame.height;
-        frameCanvas
-          .getContext("2d")
-          .putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
-        return frameCanvas;
-      }
+      window.addEventListener("resize", resizeToWindow);
 
       function draw() {
         context.clearRect(0, 0, canvas.width, canvas.height);
-        const image = prepareFrame();
         if (image) {
+          context.imageSmoothingEnabled = false;
           context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        } else {
+          context.fillStyle = "rgba(8, 12, 22, 0.35)";
+          context.fillRect(0, 0, canvas.width, canvas.height);
         }
         if (selection && selection.w > 0 && selection.h > 0) {
           const right = selection.x + selection.w;
@@ -74,7 +64,7 @@
           context.fillRect(right, selection.y, canvas.width - right, selection.h);
           context.save();
           context.strokeStyle = "#4f8cff";
-          context.lineWidth = Math.max(2, Math.round(2 * dpr));
+          context.lineWidth = Math.max(2, Math.round((canvas.width / 1920) * 2));
           context.setLineDash([]);
           context.strokeRect(selection.x, selection.y, selection.w, selection.h);
           context.restore();
@@ -112,7 +102,7 @@
       canvas.addEventListener("mouseup", () => {
         if (!drag || !selection) return;
         drag = null;
-        if (selection.w < 3 * dpr || selection.h < 3 * dpr) {
+        if (selection.w < 3 || selection.h < 3) {
           selection = null;
           draw();
           return;
@@ -142,27 +132,22 @@
       });
 
       async function loadOverlay() {
+        resizeToWindow();
         try {
           origin = await invoke("get_overlay_geometry");
         } catch (_) {}
         try {
-          const buffer = await invoke("get_overlay_frame");
-          if (buffer && buffer.byteLength > 0) {
-            frame = {
-              width: origin.width,
-              height: origin.height,
-              data: new Uint8ClampedArray(buffer),
-            };
-          }
+          const url = await invoke("get_overlay_frame");
+          const frame = new Image();
+          frame.src = url;
+          await frame.decode();
+          image = frame;
+          canvas.width = frame.naturalWidth;
+          canvas.height = frame.naturalHeight;
         } catch (error) {
           coords.textContent = `Не удалось получить кадр: ${error}`;
         }
-        resize();
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            invoke("show_overlay_window").catch(() => {});
-          });
-        });
+        draw();
         window.focus();
       }
 

@@ -38,8 +38,8 @@ use util_maker_core::{
     ModuleEntry, Registry,
 };
 use util_maker_platform::{
-    clipboard, screen_service, selection_service, HotkeyEvent, HotkeyService, NativeHost,
-    NativeSelection, RegisterFailure, ScreenSource, SettingsStore,
+    clipboard, screen_service, selection_service, FrozenFrame, HotkeyEvent, HotkeyService,
+    NativeHost, NativeSelection, RegisterFailure, ScreenSource, SettingsStore,
 };
 use util_maker_sdk::{
     protocol::InvocationSource, Action, FormCommandRequest, FormCommandResult, FrameRegion,
@@ -51,6 +51,8 @@ const CONTROL_ACTION_ID: &str = "ping";
 const CONTROL_SHORTCUT: &str = "Ctrl+Shift+U";
 const SCREENSHOT_MODULE_ID: &str = "org.utilmaker.screenshot";
 const SCREENSHOT_SAVE_DIRECTORY: &str = "saveDirectory";
+const QR_MODULE_ID: &str = "org.utilmaker.qr-code";
+const QR_READ_ACTION: &str = "read-qr-region";
 const SETTINGS_WINDOW: &str = "settings";
 const RESULT_WINDOW: &str = "result";
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -63,6 +65,7 @@ struct AppState {
     metrics: Mutex<DiagnosticsLog>,
     packages: Mutex<PackageManager>,
     overlay: Mutex<Option<OverlayFrame>>,
+    overlay_source: Mutex<Option<InvocationSource>>,
     settings: Arc<SettingsStore>,
 }
 
@@ -760,10 +763,11 @@ fn main() {
             copy_text,
             get_overlay_frame,
             get_overlay_geometry,
-            show_overlay_window,
             get_editor_image,
             save_editor_image,
             open_screenshot_editor,
+            qr_read_region,
+            retry_qr_read,
             copy_overlay_image,
             close_overlay,
             get_autostart,
@@ -813,6 +817,7 @@ fn main() {
                 metrics: Mutex::new(metrics),
                 packages: Mutex::new(packages),
                 overlay: Mutex::new(None),
+                overlay_source: Mutex::new(None),
                 settings: Arc::new(SettingsStore::new(settings_root)),
             };
             app.manage(state);
@@ -1229,6 +1234,30 @@ fn activate_qr_result(app: &AppHandle, target: &ActionRef) -> bool {
     true
 }
 
+/// Повторный вызов «Прочитать QR с экрана» при открытом успешном
+/// предпросмотре возвращает к нему, а не начинает новый выбор.
+fn activate_qr_read_result(app: &AppHandle) -> bool {
+    let is_read = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state.last_result.lock().ok().map(|slot| {
+                slot.as_ref().is_some_and(|result| {
+                    result.action_id == QR_READ_ACTION && result.status == "ok"
+                })
+            })
+        })
+        .unwrap_or(false);
+    if !is_read {
+        return false;
+    }
+    let Some(window) = app.get_webview_window(RESULT_WINDOW) else {
+        return false;
+    };
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
+}
+
 fn show_result(app: &AppHandle, result: LastResult) {
     let qr = result.action_id == "show-qr";
     if let Some(state) = app.try_state::<AppState>() {
@@ -1315,6 +1344,28 @@ fn hide_and_close(app: &AppHandle, label: &str) {
 }
 
 fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut source = state
+            .overlay_source
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *source = None;
+    }
+    open_screen_overlay(app, false)
+}
+
+fn open_qr_overlay(app: &AppHandle, source: InvocationSource) -> Result<(), String> {
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut pending = state
+            .overlay_source
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *pending = Some(source);
+    }
+    open_screen_overlay(app, true)
+}
+
+fn open_screen_overlay(app: &AppHandle, qr: bool) -> Result<(), String> {
     let screen = screen_service();
     let geometry = screen.geometry().map_err(|error| error.message)?;
     let rect = geometry.virtual_screen;
@@ -1340,8 +1391,18 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("overlay") {
         let _ = window.close();
     }
-    let window = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
-        .title("Снять область")
+    let title = if qr {
+        "Прочитать QR с экрана"
+    } else {
+        "Снять область"
+    };
+    let page = if qr {
+        "overlay.html?mode=qr"
+    } else {
+        "overlay.html"
+    };
+    let window = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App(page.into()))
+        .title(title)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
@@ -1359,21 +1420,12 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
         .set_size(PhysicalSize::new(rect.width, rect.height))
         .map_err(|error| format!("overlay size: {error}"))?;
     let _ = window.set_always_on_top(true);
-    // Окно показывает overlay.html, когда кадр уже нарисован: иначе на
-    // мгновение виден живой рабочий стол, и видео успевает стать серым.
-    let fallback = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(2500));
-        if fallback.is_visible().unwrap_or(true) {
-            return;
-        }
-        let _ = fallback.show();
-        let _ = fallback.set_focus();
-        #[cfg(windows)]
-        if let Ok(hwnd) = fallback.hwnd() {
-            util_maker_platform::raise_window(hwnd.0 as isize);
-        }
-    });
+    let _ = window.show();
+    let _ = window.set_focus();
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        util_maker_platform::raise_window(hwnd.0 as isize);
+    }
     Ok(())
 }
 
@@ -1436,6 +1488,87 @@ fn open_screenshot_editor(
         }
     });
     Ok(())
+}
+
+/// Завершает выбор области для «Прочитать QR с экрана». Кадр, который
+/// пользователь видел в окне выбора, передаётся плагину как `frame.capture`:
+/// координаты и содержимое не сдвигаются, даже если экран успел измениться.
+#[tauri::command]
+fn qr_read_region(app: AppHandle, x: i32, y: i32, width: u32, height: u32) -> Result<(), String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let (origin_x, origin_y, frame_width, frame_height) = {
+        let overlay = state.overlay.lock().map_err(|error| error.to_string())?;
+        let frame = overlay
+            .as_ref()
+            .ok_or_else(|| "кадр не захвачен".to_owned())?;
+        (frame.origin_x, frame.origin_y, frame.width, frame.height)
+    };
+    if width < 3 || height < 3 || x < 0 || y < 0 {
+        return Err("слишком маленькая область".to_owned());
+    }
+    if x as u32 + width > frame_width || y as u32 + height > frame_height {
+        return Err("область выходит за пределы экрана".to_owned());
+    }
+    let frame = state
+        .overlay
+        .lock()
+        .map_err(|error| error.to_string())?
+        .take()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let source = state
+        .overlay_source
+        .lock()
+        .map_err(|error| error.to_string())?
+        .take()
+        .unwrap_or(InvocationSource::Hotkey);
+    hide_and_close(&app, "overlay");
+
+    let selection = util_maker_sdk::FrameRegion {
+        x: origin_x.saturating_add(x),
+        y: origin_y.saturating_add(y),
+        width,
+        height,
+    };
+    let geometry = util_maker_sdk::ScreenGeometry {
+        virtual_screen: util_maker_sdk::FrameRegion {
+            x: origin_x,
+            y: origin_y,
+            width: frame.width,
+            height: frame.height,
+        },
+        monitors: frame.monitors.clone(),
+    };
+    let frozen = FrozenFrame {
+        geometry,
+        origin: util_maker_sdk::FrameOrigin {
+            x: origin_x,
+            y: origin_y,
+        },
+        pixels: frame.data,
+        stride: frame.width.saturating_mul(4),
+    };
+    let target = ActionRef::new(QR_MODULE_ID, QR_READ_ACTION);
+    let params = serde_json::json!({
+        "selection": {
+            "x": selection.x,
+            "y": selection.y,
+            "width": selection.width,
+            "height": selection.height,
+        }
+    });
+    invoke_and_show_params(&app, target, source, params, Some(frozen), false);
+    Ok(())
+}
+
+/// Открывает окно выбора заново после неудачного чтения QR.
+#[tauri::command]
+fn retry_qr_read(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(RESULT_WINDOW) {
+        let _ = window.close();
+    }
+    open_qr_overlay(&app, InvocationSource::Hotkey)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1637,18 +1770,6 @@ fn save_editor_image(
 }
 
 #[tauri::command]
-fn show_overlay_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("overlay") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        #[cfg(windows)]
-        if let Ok(hwnd) = window.hwnd() {
-            util_maker_platform::raise_window(hwnd.0 as isize);
-        }
-    }
-}
-
-#[tauri::command]
 fn get_overlay_geometry(app: AppHandle) -> Result<serde_json::Value, String> {
     let state = app
         .try_state::<AppState>()
@@ -1718,6 +1839,20 @@ fn invoke_action_params(
     selection: Arc<Mutex<NativeSelection>>,
     context: InvocationContext,
 ) -> Result<InvokeOutcome, String> {
+    invoke_action_params_with_frozen(app, target, source, params, selection, context, None)
+}
+
+/// Выполняет действие с заранее снятым кадром: `frame.capture` процесса
+/// вернёт выбранный прямоугольник снимка, а не живого экрана.
+fn invoke_action_params_with_frozen(
+    app: &AppHandle,
+    target: &ActionRef,
+    source: InvocationSource,
+    params: serde_json::Value,
+    selection: Arc<Mutex<NativeSelection>>,
+    context: InvocationContext,
+    frozen: Option<FrozenFrame>,
+) -> Result<InvokeOutcome, String> {
     logging::debug(&format!(
         "вызов действия module={} action={} source={}",
         target.module_id,
@@ -1734,8 +1869,12 @@ fn invoke_action_params(
         state.settings.clone(),
         selection.clone(),
     );
-    let mut host = HostDispatcher::new(NativeHost::new(selection, state.settings.clone()))
-        .with_extensions(Box::new(router));
+    let native = NativeHost::new(selection, state.settings.clone());
+    let native = match frozen {
+        Some(frame) => native.with_frozen_frame(frame),
+        None => native,
+    };
+    let mut host = HostDispatcher::new(native).with_extensions(Box::new(router));
     state
         .catalog
         .registry
@@ -1765,15 +1904,39 @@ fn outcome_status(outcome: &InvokeOutcome) -> &'static str {
 }
 
 fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource) {
+    invoke_and_show_params(app, target, source, serde_json::Value::Null, None, true);
+}
+
+fn invoke_and_show_params(
+    app: &AppHandle,
+    target: ActionRef,
+    source: InvocationSource,
+    params: serde_json::Value,
+    frozen: Option<FrozenFrame>,
+    allow_overlay: bool,
+) {
     if activate_qr_result(app, &target) {
         return;
     }
-    let (selection, source_ref) = capture_selection_source();
-    let context = match source {
-        InvocationSource::Hotkey => InvocationContext::hotkey(source_ref),
-        InvocationSource::Tray => InvocationContext::tray(source_ref),
+    // Для готового кадра источник вызова не нужен: внешнее окно уже потеряло
+    // фокус, и `source_lost` заблокировал бы `frame.capture`.
+    let (selection, context) = if frozen.is_some() {
+        (
+            Arc::new(Mutex::new(selection_service())),
+            InvocationContext::new(source),
+        )
+    } else {
+        let (selection, source_ref) = capture_selection_source();
+        let context = match source {
+            InvocationSource::Hotkey => InvocationContext::hotkey(source_ref),
+            InvocationSource::Tray => InvocationContext::tray(source_ref),
+        };
+        (selection, context)
     };
-    if target.module_id == "org.utilmaker.screenshot" && target.action_id == "capture-region" {
+    if allow_overlay
+        && target.module_id == SCREENSHOT_MODULE_ID
+        && target.action_id == "capture-region"
+    {
         if let Err(error) = open_screenshot_overlay(app) {
             show_result(
                 app,
@@ -1783,6 +1946,28 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
                     module_id: target.module_id,
                     action_id: target.action_id,
                     action_name: "Снять область".to_owned(),
+                    source: source.as_str().to_owned(),
+                    core_elapsed_ms: 0,
+                    since_event_ms: 0,
+                    status: "error".to_owned(),
+                },
+            );
+        }
+        return;
+    }
+    if allow_overlay && target.module_id == QR_MODULE_ID && target.action_id == QR_READ_ACTION {
+        if activate_qr_read_result(app) {
+            return;
+        }
+        if let Err(error) = open_qr_overlay(app, source) {
+            show_result(
+                app,
+                LastResult {
+                    message: format!("Не удалось открыть выбор области: {error}"),
+                    data: None,
+                    module_id: target.module_id,
+                    action_id: target.action_id,
+                    action_name: "Прочитать QR с экрана".to_owned(),
                     source: source.as_str().to_owned(),
                     core_elapsed_ms: 0,
                     since_event_ms: 0,
@@ -1809,7 +1994,8 @@ fn invoke_and_show(app: &AppHandle, target: ActionRef, source: InvocationSource)
             },
         );
     }
-    match invoke_action(app, &target, source, selection, context) {
+    match invoke_action_params_with_frozen(app, &target, source, params, selection, context, frozen)
+    {
         Ok(outcome) => {
             let since_event = started.elapsed();
             logging::write(&format!(
@@ -2928,6 +3114,24 @@ async fn invoke_target(
             status: "progress".to_owned(),
         });
     }
+    if target.module_id == QR_MODULE_ID && target.action_id == QR_READ_ACTION {
+        let parsed = match source.as_deref() {
+            Some("hotkey") => InvocationSource::Hotkey,
+            _ => InvocationSource::Tray,
+        };
+        open_qr_overlay(app, parsed)?;
+        return Ok(LastResult {
+            message: "Выделите QR-код на экране.".to_owned(),
+            data: None,
+            module_id: target.module_id,
+            action_id: target.action_id,
+            action_name: "Прочитать QR с экрана".to_owned(),
+            source: source.unwrap_or_else(|| "settings".to_owned()),
+            core_elapsed_ms: 0,
+            since_event_ms: 0,
+            status: "progress".to_owned(),
+        });
+    }
     let parsed = match source.as_deref() {
         Some("hotkey") => InvocationSource::Hotkey,
         _ => InvocationSource::Tray,
@@ -3042,11 +3246,12 @@ fn close_settings(app: AppHandle) {
     }
 }
 
-/// Кадр отдаётся сырыми пикселями RGBA, без JSON-обёртки: на 1920×1080
-/// шестнадцатеричная строка занимала десятки мегабайт и задерживала окно
-/// выбора. Размеры окно берёт из `get_overlay_geometry`.
+/// Кадр отдаётся PNG data URL — тем же способом, что и картинка редактора.
+/// Сырой IPC-ответ на WebView2 не отрисовался, поэтому окно выбора получало
+/// пустую подложку и показывало серую заглушку вместо экрана.
 #[tauri::command]
-fn get_overlay_frame(app: AppHandle) -> Result<tauri::ipc::Response, String> {
+fn get_overlay_frame(app: AppHandle) -> Result<String, String> {
+    use base64::Engine as _;
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "состояние недоступно".to_owned())?;
@@ -3054,7 +3259,21 @@ fn get_overlay_frame(app: AppHandle) -> Result<tauri::ipc::Response, String> {
     let frame = overlay
         .as_ref()
         .ok_or_else(|| "кадр не захвачен".to_owned())?;
-    Ok(tauri::ipc::Response::new(frame.data.clone()))
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, frame.width, frame.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(&frame.data)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png_bytes)
+    ))
 }
 
 #[tauri::command]
@@ -3075,6 +3294,9 @@ fn close_overlay(app: AppHandle) {
         if let Ok(mut overlay) = state.overlay.lock() {
             *overlay = None;
         }
+        if let Ok(mut source) = state.overlay_source.lock() {
+            *source = None;
+        }
     }
 }
 
@@ -3087,6 +3309,17 @@ fn copy_text(text: String) -> Result<(), String> {
 fn close_result(app: AppHandle) {
     if let Some(window) = app.get_webview_window(RESULT_WINDOW) {
         let _ = window.close();
+    }
+    // Текст прочитанного QR больше не показывается: не держим его в памяти.
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut slot) = state.last_result.lock() {
+            if slot
+                .as_ref()
+                .is_some_and(|result| result.action_id == QR_READ_ACTION)
+            {
+                *slot = None;
+            }
+        }
     }
 }
 

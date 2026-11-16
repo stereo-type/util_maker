@@ -27,7 +27,8 @@
     <script>
       const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
       const mode = new URLSearchParams(window.location.search).get("mode");
-      const submitCommand = mode === "qr" ? "qr_read_region" : "open_screenshot_editor";
+      const qrMode = mode === "qr";
+      const submitCommand = qrMode ? "qr_read_region" : "open_screenshot_editor";
       const canvas = document.getElementById("screen");
       const context = canvas.getContext("2d");
       const coords = document.getElementById("coords");
@@ -40,7 +41,7 @@
       let opening = false;
 
       function resizeToWindow() {
-        if (image) return;
+        if (image || qrMode) return;
         canvas.width = Math.max(1, Math.round(window.innerWidth * dpr));
         canvas.height = Math.max(1, Math.round(window.innerHeight * dpr));
         draw();
@@ -49,28 +50,33 @@
 
       function draw() {
         context.clearRect(0, 0, canvas.width, canvas.height);
-        if (image) {
-          context.imageSmoothingEnabled = false;
-          context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        } else {
-          context.fillStyle = "rgba(8, 12, 22, 0.35)";
-          context.fillRect(0, 0, canvas.width, canvas.height);
+        // Чтение QR: прозрачное окно и крестик, без снимка и затемнения.
+        if (!qrMode) {
+          if (image) {
+            context.imageSmoothingEnabled = false;
+            context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          } else {
+            context.fillStyle = "rgba(8, 12, 22, 0.35)";
+            context.fillRect(0, 0, canvas.width, canvas.height);
+          }
         }
         if (selection && selection.w > 0 && selection.h > 0) {
-          const right = selection.x + selection.w;
-          const bottom = selection.y + selection.h;
-          context.fillStyle = DIM;
-          context.fillRect(0, 0, canvas.width, selection.y);
-          context.fillRect(0, bottom, canvas.width, canvas.height - bottom);
-          context.fillRect(0, selection.y, selection.x, selection.h);
-          context.fillRect(right, selection.y, canvas.width - right, selection.h);
+          if (!qrMode) {
+            const right = selection.x + selection.w;
+            const bottom = selection.y + selection.h;
+            context.fillStyle = DIM;
+            context.fillRect(0, 0, canvas.width, selection.y);
+            context.fillRect(0, bottom, canvas.width, canvas.height - bottom);
+            context.fillRect(0, selection.y, selection.x, selection.h);
+            context.fillRect(right, selection.y, canvas.width - right, selection.h);
+          }
           context.save();
           context.strokeStyle = "#4f8cff";
           context.lineWidth = Math.max(2, Math.round((canvas.width / 1920) * 2));
           context.setLineDash([]);
           context.strokeRect(selection.x, selection.y, selection.w, selection.h);
           context.restore();
-        } else if (image) {
+        } else if (image && !qrMode) {
           context.fillStyle = "rgba(8, 12, 22, 0.25)";
           context.fillRect(0, 0, canvas.width, canvas.height);
         }
@@ -138,16 +144,25 @@
         try {
           origin = await invoke("get_overlay_geometry");
         } catch (_) {}
-        try {
-          const url = await invoke("get_overlay_frame");
-          const frame = new Image();
-          frame.src = url;
-          await frame.decode();
-          image = frame;
-          canvas.width = frame.naturalWidth;
-          canvas.height = frame.naturalHeight;
-        } catch (error) {
-          coords.textContent = `Не удалось получить кадр: ${error}`;
+        if (qrMode) {
+          // Координаты сразу в физических пикселях: канвас совпадает с
+          // виртуальным экраном, а не с CSS-размером окна.
+          if (origin.width > 0 && origin.height > 0) {
+            canvas.width = origin.width;
+            canvas.height = origin.height;
+          }
+        } else {
+          try {
+            const url = await invoke("get_overlay_frame");
+            const frame = new Image();
+            frame.src = url;
+            await frame.decode();
+            image = frame;
+            canvas.width = frame.naturalWidth;
+            canvas.height = frame.naturalHeight;
+          } catch (error) {
+            coords.textContent = `Не удалось получить кадр: ${error}`;
+          }
         }
         draw();
         window.focus();

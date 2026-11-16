@@ -114,16 +114,12 @@
           x: Math.round(selection.x), y: Math.round(selection.y),
           width: Math.max(1, Math.round(selection.w)), height: Math.max(1, Math.round(selection.h)),
         };
-        invoke(submitCommand, args)
-          .then(() => {
-            if (mode === "qr") invoke("close_overlay");
-          })
-          .catch((error) => {
-            opening = false;
-            selection = null;
-            coords.textContent = `Не удалось обработать область: ${error}`;
-            draw();
-          });
+        invoke(submitCommand, args).catch((error) => {
+          opening = false;
+          selection = null;
+          coords.textContent = `Не удалось обработать область: ${error}`;
+          draw();
+        });
       });
       canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
@@ -133,9 +129,7 @@
         if (event.key === "Escape") cancel();
         if (event.key === "Enter" && selection) {
           const args = { x: Math.round(selection.x), y: Math.round(selection.y), width: Math.round(selection.w), height: Math.round(selection.h) };
-          invoke(submitCommand, args).then(() => {
-            if (mode === "qr") invoke("close_overlay");
-          });
+          invoke(submitCommand, args);
         }
       });
 

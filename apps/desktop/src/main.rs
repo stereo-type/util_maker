@@ -1769,8 +1769,13 @@ fn qr_read_region(app: AppHandle, x: i32, y: i32, width: u32, height: u32) -> Re
             "height": selection.height,
         }
     });
-    // Окно выбора закрывает сам overlay после ответа команды: закрывать его
-    // изнутри обработчика, пока WebView ждёт invoke, нельзя — окно зависает.
+    // Окно выбора прячем уже после ответа команды: закрытие изнутри
+    // обработчика, пока WebView ждёт invoke, подвешивает приложение.
+    let app_for_close = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        hide_and_close(&app_for_close, "overlay");
+    });
     let app_for_call = app.clone();
     std::thread::spawn(move || {
         qr_read_and_show(app_for_call, target, source, params, frozen);

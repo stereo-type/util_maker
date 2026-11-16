@@ -1,17 +1,20 @@
 //! Исполняемый процесс плагина «Пипетка цвета».
 //!
 //! Процесс закрывает границу IPC: объявляет действие `pick-color`, читает
-//! настройку «Формат цвета» и запрашивает один снимок. Передача полноразмерных
-//! пикселей дочернему процессу ещё не реализована в SDK, поэтому после
-//! `frame.release` действие возвращает явную машинную причину, а не поддельный
-//! цвет. Переносимое состояние выбора и лупы проверяется в
-//! `util_maker_color_picker::picker`.
+//! настройку «Формат цвета» и получает один снимок рабочего стола. Пиксели
+//! читаются из локальной копии хоста ([`FrameRef::read_pixels`]), поэтому JSON
+//! не содержит полноразмерного кадра; после копирования в память ссылка сразу
+//! освобождается. Интерактивную лупу показывает окно выбора хоста, а процесс
+//! обслуживает вызов с готовой точкой: проверяет её по геометрии мониторов,
+//! форматирует значение и пишет строку в буфер обмена. Вызов без точки
+//! возвращает исход `awaiting-selection`, а не поддельный цвет.
 
 use serde_json::{json, Value};
-use util_maker_color_picker::ColorFormat;
+use util_maker_color_picker::picker::FrameData;
+use util_maker_color_picker::{ColorFormat, Point, SampleError};
 use util_maker_sdk::{
     error_codes, host_methods, run_stdio, FrameRef, HostBridge, HostCallError, InvokeRequest,
-    InvokeResult, Module, ModuleInfo, RpcError, FRAME_FORMAT_BGRA8, HOST_API_VERSION,
+    InvokeResult, Module, ModuleInfo, RpcError, HOST_API_VERSION,
 };
 
 /// Стабильный ID модуля из манифеста.
@@ -20,7 +23,7 @@ const MODULE_ID: &str = "org.utilmaker.color-picker";
 const PICK_COLOR_ACTION: &str = "pick-color";
 /// Источник кадра недоступен без моста возможностей.
 const CAPTURE_UNAVAILABLE: i64 = 2001;
-/// Хост вернул ссылку на кадр, но способа прочитать его байты ещё нет.
+/// Хост не отдал пиксели кадра или его геометрию.
 const FRAME_BYTES_UNAVAILABLE: i64 = 2002;
 
 const MODULE_VERSION: &str = match option_env!("UTIL_MAKER_MODULE_VERSION") {
@@ -64,6 +67,109 @@ impl ColorPickerModule {
             json!({ "bufferId": buffer_id }),
         )
         .map(|_| ())
+    }
+
+    /// Захватывает кадр, копирует пиксели в память и сразу освобождает ссылку
+    /// хоста: выбор продолжается по собственной копии без ограничения срока.
+    fn capture_frame(
+        host: &mut dyn HostBridge,
+        request: &InvokeRequest,
+    ) -> Result<FrameData, RpcError> {
+        let captured = host
+            .request("screen.capture", host_methods::FRAME_CAPTURE, json!({}))
+            .map_err(|error| match error {
+                HostCallError::Denied(message) => RpcError::new(
+                    CAPTURE_UNAVAILABLE,
+                    format!("источник кадра недоступен: {message}"),
+                )
+                .with_data(json!({
+                    "callId": request.call_id,
+                    "actionId": request.action_id,
+                    "outcome": "blocked",
+                    "reason": "capture-unavailable",
+                    "moduleVersion": MODULE_VERSION,
+                })),
+                other => other.into_rpc_error(),
+            })?;
+        let frame: FrameRef = serde_json::from_value(captured).map_err(|error| {
+            RpcError::new(
+                error_codes::INVALID_PARAMS,
+                format!("ответ frame.capture: {error}"),
+            )
+        })?;
+
+        // Сначала читаем локальную копию, затем освобождаем ссылку: после
+        // `frame.release` путь к пикселям уже недействителен.
+        let pixels = frame.read_pixels();
+        Self::release(host, &frame.buffer_id).map_err(HostCallError::into_rpc_error)?;
+        let pixels = pixels.map_err(|error| {
+            RpcError::new(
+                FRAME_BYTES_UNAVAILABLE,
+                format!("не удалось прочитать пиксели кадра: {error}"),
+            )
+            .with_data(json!({
+                "callId": request.call_id,
+                "actionId": request.action_id,
+                "outcome": "blocked",
+                "reason": "frame-bytes-unavailable",
+                "bufferId": frame.buffer_id,
+                "frameReleased": true,
+                "moduleVersion": MODULE_VERSION,
+            }))
+        })?;
+
+        FrameData::from_frame_ref(&frame, pixels).map_err(|error| {
+            let reason = if matches!(
+                error,
+                util_maker_color_picker::FrameError::GeometryUnavailable
+            ) {
+                "geometry-unavailable"
+            } else {
+                "invalid-frame"
+            };
+            let code = if reason == "geometry-unavailable" {
+                FRAME_BYTES_UNAVAILABLE
+            } else {
+                error_codes::INVALID_PARAMS
+            };
+            RpcError::new(code, error.to_string()).with_data(json!({
+                "callId": request.call_id,
+                "actionId": request.action_id,
+                "outcome": "blocked",
+                "reason": reason,
+                "bufferId": frame.buffer_id,
+                "frameReleased": true,
+                "moduleVersion": MODULE_VERSION,
+            }))
+        })
+    }
+
+    /// Точка выбора из `params.point`. Без неё действие ждёт окно выбора хоста.
+    fn requested_point(params: &Value) -> Result<Option<Point>, RpcError> {
+        let Some(value) = params.get("point") else {
+            return Ok(None);
+        };
+        let coordinate = |axis: &str| {
+            value
+                .get(axis)
+                .and_then(Value::as_i64)
+                .and_then(|number| i32::try_from(number).ok())
+                .ok_or_else(|| {
+                    RpcError::new(
+                        error_codes::INVALID_PARAMS,
+                        format!("координата point.{axis} должна быть i32"),
+                    )
+                })
+        };
+        Ok(Some(Point::new(coordinate("x")?, coordinate("y")?)))
+    }
+
+    fn sample_reason(error: &SampleError) -> &'static str {
+        match error {
+            SampleError::OutsideMonitors { .. } => "outside-monitors",
+            SampleError::OutsideFrame { .. } => "outside-frame",
+            SampleError::OutOfBounds => "out-of-bounds",
+        }
     }
 }
 
@@ -111,79 +217,79 @@ impl Module for ColorPickerModule {
             ),
             other => other.into_rpc_error(),
         })?;
+        let frame = Self::capture_frame(host, request)?;
+        let frame_info = json!({
+            "width": frame.width(),
+            "height": frame.height(),
+            "stride": frame.stride(),
+            "origin": {
+                "x": frame.origin().x,
+                "y": frame.origin().y,
+            },
+            "monitorCount": frame.monitors().len(),
+        });
 
-        let captured = host
-            .request("screen.capture", host_methods::FRAME_CAPTURE, json!({}))
-            .map_err(|error| match error {
-                HostCallError::Denied(message) => RpcError::new(
-                    CAPTURE_UNAVAILABLE,
-                    format!("источник кадра недоступен: {message}"),
-                ),
-                other => other.into_rpc_error(),
-            })?;
-        let frame: FrameRef = serde_json::from_value(captured).map_err(|error| {
-            RpcError::new(
-                error_codes::INVALID_PARAMS,
-                format!("ответ frame.capture: {error}"),
-            )
+        let Some(point) = Self::requested_point(&request.params)? else {
+            // Выбор показывает окно хоста: без точки возвращаем машинный исход
+            // и не выдумываем цвет.
+            return Ok(
+                InvokeResult::ok("Выберите пиксель в окне выбора.").with_data(json!({
+                    "callId": request.call_id,
+                    "actionId": request.action_id,
+                    "outcome": "awaiting-selection",
+                    "format": format.setting_value(),
+                    "point": null,
+                    "frame": frame_info,
+                    "frameReleased": true,
+                    "moduleVersion": MODULE_VERSION,
+                })),
+            );
+        };
+
+        let color = frame.sample(point).map_err(|error| {
+            RpcError::new(error_codes::INVALID_PARAMS, error.to_string()).with_data(json!({
+                "callId": request.call_id,
+                "actionId": request.action_id,
+                "outcome": "blocked",
+                "reason": Self::sample_reason(&error),
+                "point": { "x": point.x, "y": point.y },
+                "frame": frame_info,
+                "frameReleased": true,
+                "moduleVersion": MODULE_VERSION,
+            }))
         })?;
+        let text = color.format(format);
 
-        // Ссылку освобождаем даже если ниже выяснится, что кадр неполный.
-        let release_error = Self::release(host, &frame.buffer_id).err();
-        if let Some(error) = release_error {
-            return Err(error.into_rpc_error());
-        }
-
-        if frame.format != FRAME_FORMAT_BGRA8 {
-            return Err(RpcError::new(
-                error_codes::INVALID_PARAMS,
-                format!("формат кадра {} не поддерживается", frame.format),
+        host.request(
+            "clipboard.write",
+            host_methods::BUFFER_COPY,
+            json!({ "text": text }),
+        )
+        .map_err(|error| match error {
+            HostCallError::Denied(message) => RpcError::new(
+                error_codes::CAPABILITY_DENIED,
+                format!("буфер обмена недоступен: {message}"),
             )
             .with_data(json!({
                 "callId": request.call_id,
                 "actionId": request.action_id,
-                "reason": "unsupported-frame-format",
-                "format": frame.format,
-            })));
-        }
-        if frame.width == 0 || frame.height == 0 || frame.stride == 0 {
-            return Err(
-                RpcError::new(error_codes::INVALID_PARAMS, "кадр имеет нулевой размер").with_data(
-                    json!({
-                        "callId": request.call_id,
-                        "actionId": request.action_id,
-                        "reason": "invalid-frame",
-                    }),
-                ),
-            );
-        }
+                "outcome": "blocked",
+                "reason": "clipboard-denied",
+                "value": text,
+                "frameReleased": true,
+            })),
+            other => other.into_rpc_error(),
+        })?;
 
-        let monitor_count = frame
-            .geometry
-            .as_ref()
-            .map_or(0, |geometry| geometry.monitors.len());
-        let reason = if frame.geometry.is_some() {
-            "frame-bytes-unavailable"
-        } else {
-            "geometry-unavailable"
-        };
-        let message = if frame.geometry.is_some() {
-            "хост вернул кадр, но передача пикселей дочернему процессу ещё не реализована; ссылка на кадр освобождена"
-        } else {
-            "в ответе кадра нет геометрии мониторов; ссылка на кадр освобождена"
-        };
-        Err(
-            RpcError::new(FRAME_BYTES_UNAVAILABLE, message).with_data(json!({
+        Ok(
+            InvokeResult::ok(format!("Скопировано: {text}")).with_data(json!({
                 "callId": request.call_id,
                 "actionId": request.action_id,
-                "outcome": "blocked",
-                "reason": reason,
+                "outcome": "copied",
                 "format": format.setting_value(),
-                "bufferId": frame.buffer_id,
-                "width": frame.width,
-                "height": frame.height,
-                "stride": frame.stride,
-                "monitorCount": monitor_count,
+                "point": { "x": point.x, "y": point.y },
+                "value": text,
+                "frame": frame_info,
                 "frameReleased": true,
                 "moduleVersion": MODULE_VERSION,
             })),

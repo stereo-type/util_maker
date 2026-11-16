@@ -20,5 +20,6 @@ png = "0.17"
 util-maker-core.workspace = true
 util-maker-sdk.workspace = true
 util-maker-platform.workspace = true
+util-maker-color-picker = { path = "../../plugins/color-picker" }
 util-maker-packages = { path = "../../crates/packages" }
 semver.workspace = true

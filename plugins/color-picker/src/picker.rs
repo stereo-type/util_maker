@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use util_maker_sdk::{FrameRef, ScreenGeometry, FRAME_FORMAT_BGRA8};
 
-use crate::{ColorFormat, FrameError, FrameLayout, MonitorRect, Point, Rgb, SampleError};
+use crate::{
+    ColorFormat, FrameError, FrameLayout, MonitorRect, Point, Rgb, SampleError, BYTES_PER_PIXEL,
+};
 
 /// Прямоугольник в физических пикселях кадра.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -146,6 +148,25 @@ impl FrameData {
             monitors: &self.monitors,
         }
         .sample(point.x, point.y)
+    }
+
+    /// Пиксели кадра в порядке RGBA для отрисовки в окне выбора. Промежуток
+    /// `stride` в конце строки отбрасывается, верхняя строка идёт первой,
+    /// поэтому буфер соответствует `width * height * 4`. Альфа непрозрачная:
+    /// окно показывает снимок, а не прозрачность окна пользователя.
+    pub fn rgba_rows(&self) -> Vec<u8> {
+        let row_len = self.width as usize * BYTES_PER_PIXEL;
+        let mut pixels = Vec::with_capacity(row_len * self.height as usize);
+        for row in 0..self.height as usize {
+            let start = row * self.stride;
+            let Some(line) = self.pixels.get(start..start + row_len) else {
+                break;
+            };
+            for pixel in line.as_chunks::<BYTES_PER_PIXEL>().0 {
+                pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 0xFF]);
+            }
+        }
+        pixels
     }
 }
 
@@ -483,6 +504,12 @@ impl PickerSession {
 
     pub fn frame_held(&self) -> bool {
         self.frame.is_some()
+    }
+
+    /// Копия кадра в памяти. `None` после успешного копирования, Esc или
+    /// завершения вызова, когда кадр уже освобождён.
+    pub fn frame(&self) -> Option<&FrameData> {
+        self.frame.as_ref()
     }
 
     /// Ссылка хоста освобождена до открытия выбора, поэтому срок её действия
@@ -916,6 +943,35 @@ mod tests {
             StartOutcome::AlreadyActive
         );
         assert_eq!(source.captures.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn rgba_rows_drop_stride_padding_and_start_from_top_row() {
+        let width = 2u32;
+        let height = 2u32;
+        let stride = width as usize * BYTES_PER_PIXEL + 2;
+        let mut pixels = vec![0u8; stride * height as usize];
+        // (0, 0): B=1 G=2 R=3, (1, 0): B=4 G=5 R=6.
+        pixels[0..4].copy_from_slice(&[1, 2, 3, 0]);
+        pixels[4..8].copy_from_slice(&[4, 5, 6, 0]);
+        pixels[8..10].copy_from_slice(&[0xAA, 0xBB]);
+        let second = stride;
+        pixels[second..second + 4].copy_from_slice(&[7, 8, 9, 0]);
+        pixels[second + 4..second + 8].copy_from_slice(&[10, 11, 12, 0]);
+        let frame = FrameData::new(
+            pixels,
+            width,
+            height,
+            stride,
+            Point::new(0, 0),
+            geometry(&[(0, 0, width, height)]),
+        )
+        .expect("кадр");
+
+        assert_eq!(
+            frame.rgba_rows(),
+            vec![3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, 12, 11, 10, 255]
+        );
     }
 
     #[test]

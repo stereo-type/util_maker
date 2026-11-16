@@ -27,6 +27,11 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
+use util_maker_color_picker::{
+    Arrow as PickerArrow, BlockReason, ClipboardError as PickerClipboardError, ClipboardSink,
+    ColorFormat, CopyOutcome, FrameData, PickerPhase, PickerSession, Point as PickerPoint,
+    SampleError,
+};
 use util_maker_core::diagnostics::{DiagnosticsLog, LogEntry};
 use util_maker_core::hotkeys::{
     AssignmentRecord, Candidate, CheckResult, Confirmation, HotkeyPlatform, HotkeyRegistry,
@@ -53,6 +58,12 @@ const SCREENSHOT_MODULE_ID: &str = "org.utilmaker.screenshot";
 const SCREENSHOT_SAVE_DIRECTORY: &str = "saveDirectory";
 const QR_MODULE_ID: &str = "org.utilmaker.qr-code";
 const QR_READ_ACTION: &str = "read-qr-region";
+const COLOR_PICKER_MODULE_ID: &str = "org.utilmaker.color-picker";
+const COLOR_PICKER_ACTION_ID: &str = "pick-color";
+const PICKER_WINDOW: &str = "picker";
+/// Радиус окна лупы и увеличение: 15 физических пикселей без сглаживания.
+const PICKER_LOUPE_RADIUS: u32 = 7;
+const PICKER_LOUPE_ZOOM: u32 = 12;
 const SETTINGS_WINDOW: &str = "settings";
 const RESULT_WINDOW: &str = "result";
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -66,6 +77,8 @@ struct AppState {
     packages: Mutex<PackageManager>,
     overlay: Mutex<Option<OverlayFrame>>,
     overlay_source: Mutex<Option<InvocationSource>>,
+    /// Открытый выбор пикселя: снимок в памяти и состояние лупы.
+    picker: Mutex<Option<PickerSession>>,
     settings: Arc<SettingsStore>,
 }
 
@@ -770,6 +783,12 @@ fn main() {
             retry_qr_read,
             copy_overlay_image,
             close_overlay,
+            get_picker_geometry,
+            get_picker_frame,
+            picker_set_point,
+            picker_arrow,
+            picker_copy,
+            picker_cancel,
             get_autostart,
             set_autostart,
             hotkey_state_command,
@@ -818,6 +837,7 @@ fn main() {
                 packages: Mutex::new(packages),
                 overlay: Mutex::new(None),
                 overlay_source: Mutex::new(None),
+                picker: Mutex::new(None),
                 settings: Arc::new(SettingsStore::new(settings_root)),
             };
             app.manage(state);
@@ -1341,6 +1361,197 @@ fn hide_and_close(app: &AppHandle, label: &str) {
             let _ = window.close();
         }
     });
+}
+
+/// Формат из настройки «Формат цвета»; без значения — HEX из ТЗ.
+fn color_picker_format(settings: &SettingsStore) -> ColorFormat {
+    settings
+        .values(COLOR_PICKER_MODULE_ID, None)
+        .unwrap_or_default()
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ColorFormat::from_setting)
+        .unwrap_or_default()
+}
+
+/// Строка в буфер обмена из окна выбора пипетки.
+struct PickerClipboard;
+
+impl ClipboardSink for PickerClipboard {
+    fn write_text(&mut self, text: &str) -> Result<(), PickerClipboardError> {
+        clipboard::write_text(text).map_err(|error| PickerClipboardError::Other(error.to_string()))
+    }
+}
+
+fn picker_phase_name(phase: PickerPhase) -> &'static str {
+    match phase {
+        PickerPhase::Idle => "idle",
+        PickerPhase::Choosing => "choosing",
+        PickerPhase::ClipboardBusy => "clipboard-busy",
+        PickerPhase::ClipboardFailed => "clipboard-failed",
+        PickerPhase::Completed => "completed",
+        PickerPhase::Cancelled => "cancelled",
+    }
+}
+
+fn picker_sample_reason(error: &SampleError) -> &'static str {
+    match error {
+        SampleError::OutsideMonitors { .. } => "outside-monitors",
+        SampleError::OutsideFrame { .. } => "outside-frame",
+        SampleError::OutOfBounds => "out-of-bounds",
+    }
+}
+
+fn picker_sample_message(error: &SampleError) -> String {
+    match error {
+        SampleError::OutsideMonitors { .. } => "Точка вне мониторов".to_owned(),
+        SampleError::OutsideFrame { .. } => "Точка вне кадра".to_owned(),
+        SampleError::OutOfBounds => "Пиксель вне данных кадра".to_owned(),
+    }
+}
+
+fn picker_block_reason(reason: BlockReason) -> &'static str {
+    match reason {
+        BlockReason::NoFrame => "no-frame",
+        BlockReason::OutsideMonitors => "outside-monitors",
+        BlockReason::OutsideFrame => "outside-frame",
+        BlockReason::OutOfBounds => "out-of-bounds",
+        BlockReason::GeometryChanged => "geometry-changed",
+        BlockReason::GeometryUnavailable => "geometry-unavailable",
+    }
+}
+
+fn picker_block_message(reason: BlockReason) -> &'static str {
+    match reason {
+        BlockReason::NoFrame => "Кадр уже освобождён — вызовите пипетку снова.",
+        BlockReason::OutsideMonitors => "Точка не на мониторе — выберите пиксель экрана.",
+        BlockReason::OutsideFrame => "Точка вне снимка — сделайте новый снимок.",
+        BlockReason::OutOfBounds => "Пиксель вне данных кадра.",
+        BlockReason::GeometryChanged => "Конфигурация дисплеев изменилась — сделайте новый снимок.",
+        BlockReason::GeometryUnavailable => "Геометрия мониторов недоступна.",
+    }
+}
+
+fn picker_loupe_view(session: &PickerSession) -> serde_json::Value {
+    let Some(frame) = session.frame() else {
+        return serde_json::Value::Null;
+    };
+    let Ok(loupe) = session.loupe(PICKER_LOUPE_RADIUS, PICKER_LOUPE_ZOOM) else {
+        return serde_json::Value::Null;
+    };
+    let origin = frame.origin();
+    let source = loupe.source();
+    let crosshair = loupe.crosshair();
+    serde_json::json!({
+        "x": source.x - origin.x,
+        "y": source.y - origin.y,
+        "width": source.width,
+        "height": source.height,
+        "zoom": loupe.zoom(),
+        "crosshairX": crosshair.x,
+        "crosshairY": crosshair.y,
+    })
+}
+
+/// Состояние выбора для окна: точка, показанная строка и окно лупы.
+fn picker_view(session: &PickerSession) -> serde_json::Value {
+    let point = session.point();
+    let local = session.frame().map_or((0, 0), |frame| {
+        let origin = frame.origin();
+        (point.x - origin.x, point.y - origin.y)
+    });
+    let message = session
+        .copy_error()
+        .map(str::to_owned)
+        .or_else(|| session.sample_error().map(picker_sample_message));
+    serde_json::json!({
+        "point": { "x": point.x, "y": point.y },
+        "local": { "x": local.0, "y": local.1 },
+        "value": session.value(),
+        "blocked": session.sample_error().is_some(),
+        "reason": session.sample_error().map(picker_sample_reason),
+        "message": message,
+        "format": session.format().setting_value(),
+        "phase": picker_phase_name(session.phase()),
+        "geometryChanged": session.geometry_changed(),
+        "loupe": picker_loupe_view(session),
+    })
+}
+
+/// Повторный вызов возвращает в открытый выбор, а не делает новый снимок.
+fn show_picker_or_focus(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(PICKER_WINDOW) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        #[cfg(windows)]
+        if let Ok(hwnd) = window.hwnd() {
+            util_maker_platform::raise_window(hwnd.0 as isize);
+        }
+        return Ok(());
+    }
+    open_picker_overlay(app)
+}
+
+fn open_picker_overlay(app: &AppHandle) -> Result<(), String> {
+    let screen = screen_service();
+    let geometry = screen.geometry().map_err(|error| error.message)?;
+    let rect = geometry.virtual_screen;
+    let raw = screen
+        .source()
+        .capture(rect)
+        .map_err(|error| error.to_string())?;
+    let stride = usize::try_from(raw.stride).map_err(|_| "некорректный stride кадра".to_owned())?;
+    let frame = FrameData::new(
+        raw.pixels,
+        rect.width,
+        rect.height,
+        stride,
+        PickerPoint::new(rect.x, rect.y),
+        geometry,
+    )
+    .map_err(|error| format!("кадр для выбора цвета: {error}"))?;
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "состояние недоступно".to_owned())?;
+    let format = color_picker_format(&state.settings);
+    let start = util_maker_platform::cursor_position()
+        .map(|(x, y)| PickerPoint::new(x, y))
+        .unwrap_or_else(|| {
+            PickerPoint::new(
+                rect.x + rect.width as i32 / 2,
+                rect.y + rect.height as i32 / 2,
+            )
+        });
+    {
+        let mut picker = state.picker.lock().map_err(|error| error.to_string())?;
+        *picker = Some(PickerSession::new(frame, format, start, 5_000));
+    }
+    let window =
+        WebviewWindowBuilder::new(app, PICKER_WINDOW, WebviewUrl::App("picker.html".into()))
+            .title("Выбрать цвет пикселя")
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .shadow(false)
+            .focused(true)
+            .visible(false)
+            .build()
+            .map_err(|error| format!("окно выбора цвета: {error}"))?;
+    window
+        .set_position(PhysicalPosition::new(rect.x, rect.y))
+        .map_err(|error| format!("положение окна выбора: {error}"))?;
+    window
+        .set_size(PhysicalSize::new(rect.width, rect.height))
+        .map_err(|error| format!("размер окна выбора: {error}"))?;
+    let _ = window.set_always_on_top(true);
+    let _ = window.show();
+    let _ = window.set_focus();
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        util_maker_platform::raise_window(hwnd.0 as isize);
+    }
+    Ok(())
 }
 
 fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
@@ -1933,6 +2144,28 @@ fn invoke_and_show_params(
         };
         (selection, context)
     };
+    if allow_overlay
+        && target.module_id == COLOR_PICKER_MODULE_ID
+        && target.action_id == COLOR_PICKER_ACTION_ID
+    {
+        if let Err(error) = show_picker_or_focus(app) {
+            show_result(
+                app,
+                LastResult {
+                    message: format!("Не удалось открыть выбор цвета: {error}"),
+                    data: None,
+                    module_id: target.module_id,
+                    action_id: target.action_id,
+                    action_name: "Скопировать цвет пикселя".to_owned(),
+                    source: source.as_str().to_owned(),
+                    core_elapsed_ms: 0,
+                    since_event_ms: 0,
+                    status: "error".to_owned(),
+                },
+            );
+        }
+        return;
+    }
     if allow_overlay
         && target.module_id == SCREENSHOT_MODULE_ID
         && target.action_id == "capture-region"
@@ -3100,6 +3333,20 @@ async fn invoke_target(
     target: ActionRef,
     source: Option<String>,
 ) -> Result<LastResult, String> {
+    if target.module_id == COLOR_PICKER_MODULE_ID && target.action_id == COLOR_PICKER_ACTION_ID {
+        show_picker_or_focus(app)?;
+        return Ok(LastResult {
+            message: "Выберите пиксель в открывшемся окне.".to_owned(),
+            data: None,
+            module_id: target.module_id,
+            action_id: target.action_id,
+            action_name: "Скопировать цвет пикселя".to_owned(),
+            source: source.unwrap_or_else(|| "settings".to_owned()),
+            core_elapsed_ms: 0,
+            since_event_ms: 0,
+            status: "progress".to_owned(),
+        });
+    }
     if target.module_id == "org.utilmaker.screenshot" && target.action_id == "capture-region" {
         open_screenshot_overlay(app)?;
         return Ok(LastResult {
@@ -3308,6 +3555,177 @@ fn close_overlay(app: AppHandle) {
             *source = None;
         }
     }
+}
+
+/// Геометрия кадра и текущее состояние выбора для окна пипетки.
+#[tauri::command]
+fn get_picker_geometry(app: AppHandle) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "состояние недоступно".to_owned())?;
+    let picker = state.picker.lock().map_err(|error| error.to_string())?;
+    let session = picker
+        .as_ref()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let frame = session
+        .frame()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    Ok(serde_json::json!({
+        "origin": { "x": frame.origin().x, "y": frame.origin().y },
+        "width": frame.width(),
+        "height": frame.height(),
+        "monitors": frame.geometry().monitors,
+        "format": session.format().setting_value(),
+        "view": picker_view(session),
+    }))
+}
+
+/// Кадр отдаётся PNG data URL: сырой IPC-ответ WebView2 не отрисовывает.
+#[tauri::command]
+fn get_picker_frame(app: AppHandle) -> Result<String, String> {
+    use base64::Engine as _;
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "состояние недоступно".to_owned())?;
+    let picker = state.picker.lock().map_err(|error| error.to_string())?;
+    let session = picker
+        .as_ref()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let frame = session
+        .frame()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let rgba = frame.rgba_rows();
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, frame.width(), frame.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(&rgba)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png_bytes)
+    ))
+}
+
+fn update_picker<F>(app: &AppHandle, update: F) -> Result<serde_json::Value, String>
+where
+    F: FnOnce(&mut PickerSession) -> Result<(), String>,
+{
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "состояние недоступно".to_owned())?;
+    let mut picker = state.picker.lock().map_err(|error| error.to_string())?;
+    let session = picker
+        .as_mut()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    update(session)?;
+    Ok(picker_view(session))
+}
+
+/// Точка задана в пикселях кадра: окно переводит клик в его координаты.
+#[tauri::command]
+fn picker_set_point(app: AppHandle, x: i32, y: i32) -> Result<serde_json::Value, String> {
+    update_picker(&app, |session| {
+        let origin = session
+            .frame()
+            .ok_or_else(|| "кадр не захвачен".to_owned())?
+            .origin();
+        session.set_point(PickerPoint::new(
+            origin.x.saturating_add(x),
+            origin.y.saturating_add(y),
+        ));
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn picker_arrow(app: AppHandle, arrow: String) -> Result<serde_json::Value, String> {
+    let arrow = match arrow.as_str() {
+        "left" => PickerArrow::Left,
+        "right" => PickerArrow::Right,
+        "up" => PickerArrow::Up,
+        "down" => PickerArrow::Down,
+        other => return Err(format!("неизвестное направление: {other}")),
+    };
+    update_picker(&app, move |session| {
+        session.move_arrow(arrow).map_err(|error| error.to_string())
+    })
+}
+
+/// Копирует ровно показанную строку. При отказе кадр и точка сохраняются.
+#[tauri::command]
+fn picker_copy(app: AppHandle) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "состояние недоступно".to_owned())?;
+    let mut picker = state.picker.lock().map_err(|error| error.to_string())?;
+    let session = picker
+        .as_mut()
+        .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    // Смена конфигурации дисплеев блокирует копирование недостоверного пикселя.
+    if let Ok(geometry) = screen_service().geometry() {
+        session.refresh_geometry(&geometry);
+    }
+    let mut sink = PickerClipboard;
+    let outcome = session.copy(&mut sink);
+    let view = picker_view(session);
+    let copied = matches!(outcome, CopyOutcome::Copied { .. });
+    let result = match &outcome {
+        CopyOutcome::Copied { text } => {
+            logging::write(&format!("пипетка: скопировано {text}"));
+            serde_json::json!({ "status": "copied", "text": text, "view": view })
+        }
+        CopyOutcome::ClipboardBusy { text } => serde_json::json!({
+            "status": "busy",
+            "text": text,
+            "message": "Буфер обмена занят. Повторите копирование.",
+            "view": view,
+        }),
+        CopyOutcome::ClipboardFailed { text, message } => serde_json::json!({
+            "status": "failed",
+            "text": text,
+            "message": message,
+            "view": view,
+        }),
+        CopyOutcome::Blocked { text, reason } => serde_json::json!({
+            "status": "blocked",
+            "text": text,
+            "reason": picker_block_reason(*reason),
+            "message": picker_block_message(*reason),
+            "view": view,
+        }),
+        CopyOutcome::NoSelection => serde_json::json!({
+            "status": "none",
+            "message": "Выбор уже закрыт.",
+        }),
+    };
+    if copied {
+        *picker = None;
+    }
+    drop(picker);
+    if copied {
+        hide_and_close(&app, PICKER_WINDOW);
+    }
+    Ok(result)
+}
+
+/// Esc закрывает выбор и не меняет буфер обмена.
+#[tauri::command]
+fn picker_cancel(app: AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut picker) = state.picker.lock() {
+            if let Some(session) = picker.as_mut() {
+                session.escape();
+            }
+            *picker = None;
+        }
+    }
+    hide_and_close(&app, PICKER_WINDOW);
 }
 
 #[tauri::command]

@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Выбрать цвет пикселя</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0f18; }
+      canvas {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        image-rendering: pixelated;
+      }
+      #glass { cursor: crosshair; }
+      #value {
+        position: fixed; z-index: 3; display: flex; gap: 9px; align-items: center;
+        padding: 6px 10px; border-radius: 7px; background: rgba(16, 20, 30, .94);
+        border: 1px solid rgba(90, 110, 150, .35); color: #eef2fb;
+        font: 13px "Segoe UI", sans-serif; pointer-events: none; white-space: nowrap;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, .4);
+      }
+      #value .swatch {
+        width: 16px; height: 16px; border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, .4); background: #000;
+      }
+      #value .text { font-weight: 600; }
+      #value .hint { color: #9fb0cf; }
+      #value .hint.warn { color: #ffc9a0; }
+      #problem {
+        position: fixed; z-index: 4; left: 50%; bottom: 24px; transform: translateX(-50%);
+        display: none; gap: 10px; align-items: center; max-width: 720px;
+        padding: 9px 12px; border-radius: 8px; background: rgba(48, 20, 24, .96);
+        border: 1px solid #7a2d33; color: #ffd9dc; font: 13px "Segoe UI", sans-serif;
+      }
+      #problem button {
+        font: 13px "Segoe UI", sans-serif; padding: 5px 10px; border-radius: 6px;
+        border: 1px solid #3a4668; background: #232c42; color: #e8ecf6; cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="screen"></canvas>
+    <canvas id="glass"></canvas>
+    <div id="value">
+      <span class="swatch" id="swatch"></span>
+      <span class="text" id="text">…</span>
+      <span class="hint" id="hint"></span>
+    </div>
+    <div id="problem">
+      <span id="problem-text"></span>
+      <button id="retry" type="button">Повторить копирование</button>
+    </div>
+    <script>
+      const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
+      const screenCanvas = document.getElementById("screen");
+      const glass = document.getElementById("glass");
+      const screenContext = screenCanvas.getContext("2d");
+      const glassContext = glass.getContext("2d");
+      const valueBox = document.getElementById("value");
+      const swatch = document.getElementById("swatch");
+      const valueText = document.getElementById("text");
+      const valueHint = document.getElementById("hint");
+      const problem = document.getElementById("problem");
+      const problemText = document.getElementById("problem-text");
+      const retry = document.getElementById("retry");
+
+      // Окно лупы: 15 физических пикселей, увеличение ×12 без сглаживания.
+      const LOUPE_GAP = 26;
+      const HINT = "ЛКМ или Enter — скопировать · стрелки — 1 пиксель · Esc — отмена";
+
+      let frame = { width: 0, height: 0, originX: 0, originY: 0 };
+      let view = null;
+      let copying = false;
+      let requestFrame = 0;
+      let queuedPoint = null;
+      let sequence = 0;
+      let applied = 0;
+      let cursor = { x: 0, y: 0 };
+
+      function frameRect() {
+        return glass.getBoundingClientRect();
+      }
+
+      function localPoint(clientX, clientY) {
+        const rect = frameRect();
+        if (!frame.width || rect.width <= 0 || rect.height <= 0) return null;
+        const x = Math.floor(((clientX - rect.left) * frame.width) / rect.width);
+        const y = Math.floor(((clientY - rect.top) * frame.height) / rect.height);
+        return {
+          x: Math.min(frame.width - 1, Math.max(0, x)),
+          y: Math.min(frame.height - 1, Math.max(0, y)),
+        };
+      }
+
+      function placeValueBox(clientX, clientY) {
+        const box = valueBox.getBoundingClientRect();
+        let left = clientX + 20;
+        let top = clientY + 22;
+        if (left + box.width > window.innerWidth - 8) left = clientX - 20 - box.width;
+        if (top + box.height > window.innerHeight - 8) top = clientY - 22 - box.height;
+        valueBox.style.left = `${Math.max(8, left)}px`;
+        valueBox.style.top = `${Math.max(8, top)}px`;
+      }
+
+      function placeValueBoxAt(local) {
+        const rect = frameRect();
+        if (!frame.width) return;
+        placeValueBox(
+          rect.left + ((local.x + 0.5) * rect.width) / frame.width,
+          rect.top + ((local.y + 0.5) * rect.height) / frame.height,
+        );
+      }
+
+      function drawLoupe(loupe, local) {
+        const width = loupe.width * loupe.zoom;
+        const height = loupe.height * loupe.zoom;
+        // Окно лупы смещается само, выбранная точка остаётся на месте.
+        let x = local.x + LOUPE_GAP;
+        let y = local.y + LOUPE_GAP;
+        if (x + width > frame.width - 4) x = local.x - LOUPE_GAP - width;
+        if (y + height > frame.height - 4) y = local.y - LOUPE_GAP - height;
+        x = Math.max(4, Math.min(frame.width - width - 4, x));
+        y = Math.max(4, Math.min(frame.height - height - 4, y));
+
+        glassContext.imageSmoothingEnabled = false;
+        glassContext.drawImage(
+          screenCanvas,
+          loupe.x, loupe.y, loupe.width, loupe.height,
+          x, y, width, height,
+        );
+        glassContext.strokeStyle = "rgba(10, 14, 24, .95)";
+        glassContext.lineWidth = 4;
+        glassContext.strokeRect(x - 2, y - 2, width + 4, height + 4);
+        glassContext.strokeStyle = "rgba(232, 238, 252, .85)";
+        glassContext.lineWidth = 2;
+        glassContext.strokeRect(x - 1, y - 1, width + 2, height + 2);
+
+        const crossX = x + loupe.crosshairX;
+        const crossY = y + loupe.crosshairY;
+        glassContext.strokeStyle = "rgba(10, 14, 24, .9)";
+        glassContext.lineWidth = 3;
+        glassContext.beginPath();
+        glassContext.moveTo(crossX, y);
+        glassContext.lineTo(crossX, y + height);
+        glassContext.moveTo(x, crossY);
+        glassContext.lineTo(x + width, crossY);
+        glassContext.stroke();
+        glassContext.strokeStyle = "rgba(255, 255, 255, .92)";
+        glassContext.lineWidth = 1;
+        glassContext.beginPath();
+        glassContext.moveTo(crossX, y);
+        glassContext.lineTo(crossX, y + height);
+        glassContext.moveTo(x, crossY);
+        glassContext.lineTo(x + width, crossY);
+        glassContext.stroke();
+      }
+
+      function drawMarker(local) {
+        // Рамка выбранного пикселя: тёмная подложка и светлый контур.
+        glassContext.strokeStyle = "rgba(10, 14, 24, .9)";
+        glassContext.lineWidth = 3;
+        glassContext.strokeRect(local.x - 1, local.y - 1, 3, 3);
+        glassContext.strokeStyle = "rgba(255, 255, 255, .95)";
+        glassContext.lineWidth = 1;
+        glassContext.strokeRect(local.x, local.y, 1, 1);
+      }
+
+      function renderProblem(next) {
+        if (next.phase === "clipboard-busy" || next.phase === "clipboard-failed") {
+          problem.style.display = "flex";
+          problemText.textContent = next.message || "Не удалось записать цвет в буфер обмена.";
+          retry.style.display = "inline-block";
+        } else if (next.phase === "choosing") {
+          problem.style.display = "none";
+        }
+      }
+
+      function applyView(next) {
+        if (!next) return;
+        view = next;
+        glassContext.clearRect(0, 0, glass.width, glass.height);
+        const local = next.local || { x: 0, y: 0 };
+        if (next.loupe) drawLoupe(next.loupe, local);
+        drawMarker(local);
+        placeValueBoxAt(local);
+
+        valueText.textContent = next.value || "—";
+        if (next.value) {
+          swatch.style.background = next.value;
+          swatch.style.display = "inline-block";
+        } else {
+          swatch.style.display = "none";
+        }
+        valueHint.textContent = next.blocked ? (next.message || "нет пикселя") : HINT;
+        valueHint.className = next.blocked ? "hint warn" : "hint";
+        renderProblem(next);
+      }
+
+      function requestPoint(x, y) {
+        queuedPoint = { x, y };
+        if (requestFrame) return;
+        requestFrame = requestAnimationFrame(async () => {
+          requestFrame = 0;
+          const point = queuedPoint;
+          queuedPoint = null;
+          if (!point) return;
+          const token = ++sequence;
+          try {
+            const next = await invoke("picker_set_point", { x: point.x, y: point.y });
+            if (token < applied) return;
+            applied = token;
+            applyView(next);
+          } catch (error) {
+            valueHint.textContent = `Ошибка выбора: ${error}`;
+            valueHint.className = "hint warn";
+          }
+        });
+      }
+
+      async function copy() {
+        if (copying) return;
+        copying = true;
+        try {
+          const result = await invoke("picker_copy");
+          if (result.view) applyView(result.view);
+          if (result.status === "copied") return;
+          problem.style.display = "flex";
+          problemText.textContent = result.message || "Не удалось скопировать цвет.";
+          // При смене геометрии дисплеев повтор не поможет: нужен новый снимок.
+          retry.style.display = result.status === "blocked" ? "none" : "inline-block";
+        } catch (error) {
+          problem.style.display = "flex";
+          problemText.textContent = `Не удалось скопировать: ${error}`;
+          retry.style.display = "inline-block";
+        } finally {
+          copying = false;
+        }
+      }
+
+      glass.addEventListener("mousemove", (event) => {
+        if (copying) return;
+        const point = localPoint(event.clientX, event.clientY);
+        if (!point) return;
+        cursor = { x: event.clientX, y: event.clientY };
+        placeValueBox(event.clientX, event.clientY);
+        requestPoint(point.x, point.y);
+      });
+      glass.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const point = localPoint(event.clientX, event.clientY);
+        if (point) requestPoint(point.x, point.y);
+      });
+      glass.addEventListener("click", async (event) => {
+        // Сначала фиксируем точку под курсором, чтобы скопировать именно её.
+        const point = localPoint(event.clientX, event.clientY);
+        if (point) {
+          const token = ++sequence;
+          try {
+            const next = await invoke("picker_set_point", { x: point.x, y: point.y });
+            if (token >= applied) {
+              applied = token;
+              applyView(next);
+            }
+          } catch (_) {
+            // Ошибку покажет попытка копирования ниже.
+          }
+        }
+        await copy();
+      });
+      document.addEventListener("contextmenu", (event) => event.preventDefault());
+
+      document.addEventListener("keydown", async (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          await invoke("picker_cancel").catch(() => {});
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          await copy();
+          return;
+        }
+        const arrows = {
+          ArrowLeft: "left",
+          ArrowRight: "right",
+          ArrowUp: "up",
+          ArrowDown: "down",
+        };
+        const arrow = arrows[event.key];
+        if (!arrow) return;
+        event.preventDefault();
+        try {
+          applyView(await invoke("picker_arrow", { arrow }));
+        } catch (error) {
+          valueHint.textContent = `Ошибка выбора: ${error}`;
+          valueHint.className = "hint warn";
+        }
+      });
+      retry.addEventListener("click", (event) => {
+        event.preventDefault();
+        copy();
+      });
+
+      async function loadPicker() {
+        const geometry = await invoke("get_picker_geometry");
+        frame = {
+          width: geometry.width,
+          height: geometry.height,
+          originX: geometry.origin.x,
+          originY: geometry.origin.y,
+        };
+        screenCanvas.width = geometry.width;
+        screenCanvas.height = geometry.height;
+        glass.width = geometry.width;
+        glass.height = geometry.height;
+        // Кадр приходит PNG data URL: сырой IPC-ответ WebView2 не рисует.
+        const url = await invoke("get_picker_frame");
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+        frame.width = image.naturalWidth || geometry.width;
+        frame.height = image.naturalHeight || geometry.height;
+        screenCanvas.width = frame.width;
+        screenCanvas.height = frame.height;
+        glass.width = frame.width;
+        glass.height = frame.height;
+        screenContext.imageSmoothingEnabled = false;
+        screenContext.drawImage(image, 0, 0);
+        applyView(geometry.view);
+        if (geometry.view && geometry.view.local) {
+          placeValueBoxAt(geometry.view.local);
+        }
+        window.focus();
+      }
+
+      loadPicker().catch((error) => {
+        problem.style.display = "flex";
+        problemText.textContent = `Не удалось открыть выбор цвета: ${error}`;
+        retry.style.display = "none";
+      });
+
+      // Держим подсказку рядом с курсором даже после смены размера окна.
+      window.addEventListener("resize", () => {
+        if (view && view.local) placeValueBoxAt(view.local);
+        else placeValueBox(cursor.x, cursor.y);
+      });
+    </script>
+  </body>
+</html>

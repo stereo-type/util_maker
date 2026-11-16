@@ -4552,6 +4552,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "util-maker-color-picker",
  "util-maker-core",
  "util-maker-packages",
  "util-maker-platform",

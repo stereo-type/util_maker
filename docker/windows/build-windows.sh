@@ -99,7 +99,8 @@ package_plugin() {
     if [ -n "$plugin_icon" ] && [ -f "$plugin_icon" ]; then
         cp "$plugin_icon" "$stage/assets/icon.png"
     fi
-    output="$package_dir/$plugin_id-$version-windows-x64.umpkg"
+    plugin_version=$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "$plugin_manifest" | head -n 1)
+    output="$package_dir/$plugin_id-$plugin_version-windows-x64.umpkg"
     cargo run --quiet -p util-maker-packages --bin util-maker-package -- export \
         --source "$stage" \
         --manifest "$plugin_manifest" \
@@ -114,8 +115,9 @@ package_plugin() {
 
 package_plugin org.utilmaker.screenshot "$screenshot_module" "$screenshot_manifest" "$screenshot_icon"
 package_plugin org.utilmaker.translator "$translator_module" "$translator_manifest" "$translator_icon"
-package_plugin org.utilmaker.color-picker "$color_picker_module" "$color_picker_manifest" \
-        "$yandex_module" "$yandex_manifest" "$google_module" "$google_manifest" "$color_picker_icon"
+package_plugin org.utilmaker.color-picker "$color_picker_module" "$color_picker_manifest" "$color_picker_icon"
+package_plugin org.utilmaker.translator.yandex "$yandex_module" "$yandex_manifest" ""
+package_plugin org.utilmaker.translator.google "$google_module" "$google_manifest" ""
 
 rm -rf "$package_dir/staging"
 

@@ -14,18 +14,21 @@
 
 ### С чего начать параллельную работу
 
+Для этапа [типизированных провайдеров](../blocks/core/typed-providers.md) можно сразу распределить [манифест и API](blocks/sdk/typed-provider-manifest.md), [пакет файловых хранилищ](blocks/providers/file-storage/file-storage-service.md), [WebDAV Nextcloud](blocks/providers/file-storage/nextcloud/webdav-storage.md) и [авторизацию Google Диска](blocks/providers/file-storage/google-drive/desktop-authorization.md). Сервисы разрабатываются на тестовых данных и HTTP-серверах. Зависимости для интеграции указаны в карточках.
+
 Для расширения штатной поставки три агента могут независимо взять [распознавание текста](blocks/plugins/screen-ocr/recognize-crop.md), [кодирование QR](blocks/plugins/qr-code/encode-text.md) и [чтение цвета пикселя](blocks/plugins/color-picker/sample-pixel.md). Для старта достаточно эталонных данных. Параллельно в очереди SDK доступна [передача пикселей дочернему процессу](blocks/sdk/plugin-frame-access.md). Она понадобится для проверки всех трёх плагинов на реальном рабочем столе.
 
 Перед назначением сверяйте актуальную строку в очереди. Раздел «Зависимости для старта» указывает, какие результаты уже должны быть доступны в checkout агента. Раздел «Для сквозной проверки» указывает, какие реализации понадобятся позже, чтобы подтвердить работу компонентов вместе.
 
 ## Общие задачи
 
-Обе общие задачи относятся к этапу 4. Перед началом проверьте зависимости в карточке. Пока обязательные результаты недоступны, переходите к очередям компонентов.
+Общие задачи объединяют результаты нескольких очередей. Перед началом сквозной приёмки проверьте зависимости в карточке. Пока нужные результаты недоступны, переходите к очередям компонентов.
 
 | Задача | Статус |
 | --- | --- |
 | [Включить два штатных пакета в установщик Windows](windows-distribution.md) | ✅ Выполнена |
 | [Принять первую поставку по 11 сценариям Windows](windows-release-acceptance.md) | ✅ Выполнена |
+| [Принять сохранение скриншотов в именованные облачные подключения](provider-storage-acceptance.md) | 📥 К выполнению |
 
 ## Очереди компонентов
 
@@ -43,6 +46,9 @@
 | `plugins/screen-ocr` | [Текст с экрана](blocks/plugins/screen-ocr/README.md) | [ТЗ](../blocks/plugins/screen-ocr/README.md) |
 | `plugins/qr-code` | [QR-коды](blocks/plugins/qr-code/README.md) | [ТЗ](../blocks/plugins/qr-code/README.md) |
 | `plugins/color-picker` | [Пипетка цвета](blocks/plugins/color-picker/README.md) | [ТЗ](../blocks/plugins/color-picker/README.md) |
+| `providers/file-storage` | [Файловые хранилища](blocks/providers/file-storage/README.md) | [ТЗ](../blocks/providers/file-storage/README.md) |
+| `providers/file-storage/nextcloud` | [Nextcloud](blocks/providers/file-storage/nextcloud/README.md) | [ТЗ](../blocks/providers/file-storage/nextcloud/README.md) |
+| `providers/file-storage/google-drive` | [Google Диск](blocks/providers/file-storage/google-drive/README.md) | [ТЗ](../blocks/providers/file-storage/google-drive/README.md) |
 
 Все задачи первого этапа, включая прежние общие задачи, сохранены в [очереди ядра](blocks/core/README.md). Результаты ревью прототипа собраны в [протоколе версии 0.4.1](prototype-review.md).
 

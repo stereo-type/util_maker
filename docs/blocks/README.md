@@ -1,6 +1,6 @@
 # Функциональные блоки Util Maker
 
-У каждого компонента есть ТЗ и своя очередь задач. Путь блока одинаков в `docs/blocks/` и `docs/tasks/blocks/`. Например, изменения HTTP-запросов к Google принимает блок `plugins/translator/providers`, а поведение переводчика после получения ответа — `plugins/translator`. Провайдеры поставляются внутри пакета переводчика.
+У каждого компонента есть ТЗ и своя очередь задач. Путь блока одинаков в `docs/blocks/` и `docs/tasks/blocks/`. Адаптеры Google и Яндекса для перевода относятся к `plugins/translator/providers`. Общий механизм подключения сервисов описан в [ТЗ типизированных провайдеров](core/typed-providers.md), а пакеты файловых хранилищ перечислены отдельно.
 
 Общие требования к поставке и сквозные сценарии определены в [ТЗ проекта](../specification.md). Как выбрать владельца новой задачи, описано в [правилах работы с задачами](../task-workflow.md).
 
@@ -18,6 +18,9 @@
 | [Текст с экрана](plugins/screen-ocr/README.md) | Локальное OCR выбранной области, правка и копирование распознанного текста. | [Задачи](../tasks/blocks/plugins/screen-ocr/README.md) |
 | [QR-коды](plugins/qr-code/README.md) | Показ QR из текста и чтение QR из области экрана. | [Задачи](../tasks/blocks/plugins/qr-code/README.md) |
 | [Пипетка цвета](plugins/color-picker/README.md) | Выбор пикселя с лупой и копирование значения в HEX или RGB. | [Задачи](../tasks/blocks/plugins/color-picker/README.md) |
+| [Файловые хранилища](providers/file-storage/README.md) | Контракт сохранения файла и делегирование подключённой реализации. | [Задачи](../tasks/blocks/providers/file-storage/README.md) |
+| [Nextcloud](providers/file-storage/nextcloud/README.md) | Подключение к серверу и запись в выбранную папку по WebDAV. | [Задачи](../tasks/blocks/providers/file-storage/nextcloud/README.md) |
+| [Google Диск](providers/file-storage/google-drive/README.md) | OAuth аккаунтов, выбор папки и загрузка через Drive API. | [Задачи](../tasks/blocks/providers/file-storage/google-drive/README.md) |
 
 ## Сквозная приёмка
 

@@ -51,6 +51,18 @@ SDK и ядро предоставляют плагинам контекст и�
 
 Для возможных портов на Ubuntu и macOS сохраняем переносимость ядра и формата пакета. Решение о конкретном порте принимается отдельно. Первой задачей такого порта будет проверка системных возможностей для трея, глобального шорткея, захвата и буфера на выбранной ОС. [Границы платформы](specification.md#1-назначение-и-границы)
 
+### Типизированные провайдеры и файловые хранилища
+
+Первый потребитель — редактор скриншотов. Пользователь подключает несколько аккаунтов, выбирает для каждого приложения совместимое хранилище и папку. Другое приложение может объявить собственный слот того же типа и воспользоваться уже настроенным аккаунтом. [Общее ТЗ](blocks/core/typed-providers.md) · [Контракт записи файла](blocks/providers/file-storage/README.md)
+
+| Результат | Карточки |
+| --- | --- |
+| Хост принимает типы пакетов и находит назначение каждого потребителя | [Манифест и SDK](tasks/blocks/sdk/typed-provider-manifest.md) · [Каталог и привязки](tasks/blocks/core/provider-bindings.md) · [Маршрутизация](tasks/blocks/core/provider-invocation.md) |
+| Реализация получает только данные выбранной записи и своего аккаунта | [Передача файла вне JSON](tasks/blocks/sdk/provider-content-transfer.md) · [Секреты подключений](tasks/blocks/platform/windows/provider-connection-secrets.md) |
+| Оба сервиса сохраняют файл через один контракт | [Пакет файловых хранилищ](tasks/blocks/providers/file-storage/file-storage-service.md) · [Nextcloud](tasks/blocks/providers/file-storage/nextcloud/webdav-storage.md) · [Вход в Google](tasks/blocks/providers/file-storage/google-drive/desktop-authorization.md) · [Запись в Google Диск](tasks/blocks/providers/file-storage/google-drive/drive-file-upload.md) |
+| Пользователь подключает аккаунты и сохраняет итоговый PNG | [Раздел провайдеров](tasks/blocks/desktop/provider-connections-ui.md) · [Выбор подключения и папки](tasks/blocks/desktop/provider-slot-selector.md) · [Сохранение скриншота](tasks/blocks/plugins/screenshot/provider-save-target.md) |
+| Пакеты обновляются независимо, один аккаунт используется несколькими приложениями | [Упаковка и обновление](tasks/blocks/packages/storage-provider-packages.md) · [Сквозная приёмка](tasks/provider-storage-acceptance.md) |
+
 ## Как выделить следующую задачу
 
 Выберите один проверяемый результат этапа и компонент, который за него отвечает. Например, для скриншотов получение кадра с координатами монитора относится к `platform/windows`, а отмена аннотации в редакторе — к `plugins/screenshot`. Перед созданием карточки проверьте очередь владельца. В карточке укажите этап, ссылку на ТЗ блока, необходимые зависимости и критерий приёмки. Статусы ведутся в [очередях задач](tasks/README.md) по [правилам работы с карточками](task-workflow.md).

@@ -3246,6 +3246,15 @@ fn close_settings(app: AppHandle) {
     }
 }
 
+/// Переставляет каналы BGRA в RGBA для PNG: захват отдаёт BGRA.
+fn bgra_to_rgba(data: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(data.len());
+    for pixel in data.as_chunks::<4>().0 {
+        rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+    }
+    rgba
+}
+
 /// Кадр отдаётся PNG data URL — тем же способом, что и картинка редактора.
 /// Сырой IPC-ответ на WebView2 не отрисовался, поэтому окно выбора получало
 /// пустую подложку и показывало серую заглушку вместо экрана.
@@ -3259,6 +3268,7 @@ fn get_overlay_frame(app: AppHandle) -> Result<String, String> {
     let frame = overlay
         .as_ref()
         .ok_or_else(|| "кадр не захвачен".to_owned())?;
+    let rgba = bgra_to_rgba(&frame.data);
     let mut png_bytes = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut png_bytes, frame.width, frame.height);
@@ -3267,7 +3277,7 @@ fn get_overlay_frame(app: AppHandle) -> Result<String, String> {
         encoder.set_compression(png::Compression::Fast);
         let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
         writer
-            .write_image_data(&frame.data)
+            .write_image_data(&rgba)
             .map_err(|error| error.to_string())?;
     }
     Ok(format!(
@@ -3732,6 +3742,15 @@ mod tests {
     fn pause_menu_label_reflects_tray_state() {
         assert_eq!(pause_menu_label(false), "Пауза сочетания");
         assert_eq!(pause_menu_label(true), "Возобновить сочетание");
+    }
+
+    #[test]
+    fn overlay_frame_swaps_blue_and_red_channels() {
+        assert_eq!(bgra_to_rgba(&[10, 20, 30, 255]), vec![30, 20, 10, 255]);
+        assert_eq!(
+            bgra_to_rgba(&[1, 2, 3, 4, 5, 6, 7, 8]),
+            vec![3, 2, 1, 4, 7, 6, 5, 8]
+        );
     }
 
     #[test]

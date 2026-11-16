@@ -760,6 +760,7 @@ fn main() {
             copy_text,
             get_overlay_frame,
             get_overlay_geometry,
+            show_overlay_window,
             get_editor_image,
             save_editor_image,
             open_screenshot_editor,
@@ -1358,12 +1359,21 @@ fn open_screenshot_overlay(app: &AppHandle) -> Result<(), String> {
         .set_size(PhysicalSize::new(rect.width, rect.height))
         .map_err(|error| format!("overlay size: {error}"))?;
     let _ = window.set_always_on_top(true);
-    let _ = window.show();
-    let _ = window.set_focus();
-    #[cfg(windows)]
-    if let Ok(hwnd) = window.hwnd() {
-        util_maker_platform::raise_window(hwnd.0 as isize);
-    }
+    // Окно показывает overlay.html, когда кадр уже нарисован: иначе на
+    // мгновение виден живой рабочий стол, и видео успевает стать серым.
+    let fallback = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        if fallback.is_visible().unwrap_or(true) {
+            return;
+        }
+        let _ = fallback.show();
+        let _ = fallback.set_focus();
+        #[cfg(windows)]
+        if let Ok(hwnd) = fallback.hwnd() {
+            util_maker_platform::raise_window(hwnd.0 as isize);
+        }
+    });
     Ok(())
 }
 
@@ -1624,6 +1634,18 @@ fn save_editor_image(
 ) -> Result<String, String> {
     let directory = screenshot_save_directory(&app)?;
     write_screenshot_png(&directory, width, height, &rgba).map(|path| path.display().to_string())
+}
+
+#[tauri::command]
+fn show_overlay_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        #[cfg(windows)]
+        if let Ok(hwnd) = window.hwnd() {
+            util_maker_platform::raise_window(hwnd.0 as isize);
+        }
+    }
 }
 
 #[tauri::command]
@@ -3020,8 +3042,11 @@ fn close_settings(app: AppHandle) {
     }
 }
 
+/// Кадр отдаётся сырыми пикселями RGBA, без JSON-обёртки: на 1920×1080
+/// шестнадцатеричная строка занимала десятки мегабайт и задерживала окно
+/// выбора. Размеры окно берёт из `get_overlay_geometry`.
 #[tauri::command]
-fn get_overlay_frame(app: AppHandle) -> Result<serde_json::Value, String> {
+fn get_overlay_frame(app: AppHandle) -> Result<tauri::ipc::Response, String> {
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "состояние недоступно".to_owned())?;
@@ -3029,15 +3054,7 @@ fn get_overlay_frame(app: AppHandle) -> Result<serde_json::Value, String> {
     let frame = overlay
         .as_ref()
         .ok_or_else(|| "кадр не захвачен".to_owned())?;
-    let mut data = String::with_capacity(frame.data.len() * 2);
-    for byte in &frame.data {
-        data.push_str(&format!("{byte:02x}"));
-    }
-    Ok(serde_json::json!({
-        "width": frame.width,
-        "height": frame.height,
-        "data": data,
-    }))
+    Ok(tauri::ipc::Response::new(frame.data.clone()))
 }
 
 #[tauri::command]

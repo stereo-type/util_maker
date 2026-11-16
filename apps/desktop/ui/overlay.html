@@ -30,7 +30,10 @@
       const context = canvas.getContext("2d");
       const coords = document.getElementById("coords");
       const dpr = window.devicePixelRatio || 1;
-      let origin = { x: 0, y: 0 };
+      const DIM = "rgba(8, 12, 22, 0.45)";
+      let origin = { x: 0, y: 0, width: 0, height: 0 };
+      let frame = null;
+      let frameCanvas = null;
       let drag = null;
       let selection = null;
       let opening = false;
@@ -38,21 +41,47 @@
       function resize() {
         canvas.width = Math.max(1, Math.round(window.innerWidth * dpr));
         canvas.height = Math.max(1, Math.round(window.innerHeight * dpr));
+        context.imageSmoothingEnabled = false;
         draw();
       }
       window.addEventListener("resize", resize);
 
+      function prepareFrame() {
+        if (!frame || frameCanvas) return frameCanvas;
+        if (frame.data.length !== frame.width * frame.height * 4) return null;
+        frameCanvas = document.createElement("canvas");
+        frameCanvas.width = frame.width;
+        frameCanvas.height = frame.height;
+        frameCanvas
+          .getContext("2d")
+          .putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
+        return frameCanvas;
+      }
+
       function draw() {
         context.clearRect(0, 0, canvas.width, canvas.height);
-        if (!selection) return;
-        context.save();
-        context.strokeStyle = "#4f8cff";
-        context.lineWidth = Math.max(2, Math.round(2 * dpr));
-        context.setLineDash([]);
-        context.strokeRect(selection.x, selection.y, selection.w, selection.h);
-        context.fillStyle = "rgba(79,140,255,.08)";
-        context.fillRect(selection.x, selection.y, selection.w, selection.h);
-        context.restore();
+        const image = prepareFrame();
+        if (image) {
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        }
+        if (selection && selection.w > 0 && selection.h > 0) {
+          const right = selection.x + selection.w;
+          const bottom = selection.y + selection.h;
+          context.fillStyle = DIM;
+          context.fillRect(0, 0, canvas.width, selection.y);
+          context.fillRect(0, bottom, canvas.width, canvas.height - bottom);
+          context.fillRect(0, selection.y, selection.x, selection.h);
+          context.fillRect(right, selection.y, canvas.width - right, selection.h);
+          context.save();
+          context.strokeStyle = "#4f8cff";
+          context.lineWidth = Math.max(2, Math.round(2 * dpr));
+          context.setLineDash([]);
+          context.strokeRect(selection.x, selection.y, selection.w, selection.h);
+          context.restore();
+        } else if (image) {
+          context.fillStyle = "rgba(8, 12, 22, 0.25)";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+        }
       }
 
       function point(event) {
@@ -112,13 +141,32 @@
         }
       });
 
-      (async () => {
+      async function loadOverlay() {
         try {
           origin = await invoke("get_overlay_geometry");
         } catch (_) {}
+        try {
+          const buffer = await invoke("get_overlay_frame");
+          if (buffer && buffer.byteLength > 0) {
+            frame = {
+              width: origin.width,
+              height: origin.height,
+              data: new Uint8ClampedArray(buffer),
+            };
+          }
+        } catch (error) {
+          coords.textContent = `Не удалось получить кадр: ${error}`;
+        }
         resize();
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            invoke("show_overlay_window").catch(() => {});
+          });
+        });
         window.focus();
-      })();
+      }
+
+      loadOverlay();
     </script>
   </body>
 </html>
